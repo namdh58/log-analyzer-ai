@@ -105,6 +105,36 @@ def _render_logs(entries) -> list[dict]:
     return [{"service": e.service, "level": e.level, "message": e.message} for e in entries][-_MAX_LOG_LINES:]
 
 
+def _pct(v) -> str:
+    return f"{v:.1f}%" if v is not None else "N/A"
+
+
+def _mib(v) -> str:
+    return f"{v / 1048576:.0f}MiB" if v is not None else "N/A"
+
+
+def _num(v, unit: str = "") -> str:
+    return f"{v:.2f}{unit}" if v is not None else "N/A"
+
+
+def _format_service_row(service: str, m: dict) -> str:
+    """One clean, labeled line per service -- deliberately not a raw dict repr. A dense
+    table of unrounded floats/nested dicts made a real (smaller/cheaper) model misattribute
+    one service's error_rate to a different service in testing; explicit per-field labels
+    next to the service name are cheap insurance against that."""
+    cpu = m.get("cpu") or {}
+    mem = m.get("memory") or {}
+    error_rate = m.get("error_rate")
+    return (
+        f"- {service}: cpu avg={_pct(cpu.get('avg_pct'))} peak={_pct(cpu.get('peak_pct'))} | "
+        f"mem avg={_pct(mem.get('avg_pct'))} peak={_pct(mem.get('peak_pct'))} "
+        f"({_mib(mem.get('used_bytes'))}/{_mib(mem.get('limit_bytes'))}) | "
+        f"request_rate={_num(m.get('request_rate'), '/s')} | "
+        f"p95_latency={_num(m.get('p95_latency_ms'), 'ms')} | "
+        f"error_rate={_pct(error_rate * 100 if error_rate is not None else None)}"
+    )
+
+
 def render_context(context: dict) -> str:
     """Turn the compact context dict into text for the analyst prompt."""
     lines = [f"Mode: {context.get('mode', 'general')}"]
@@ -127,15 +157,16 @@ def render_context(context: dict) -> str:
                 lines.append(f"- {sp['service']}.{sp['operation']} {sp['duration_ms']}ms status={sp['status']}")
             lines.append("\nSERVICE METRICS around the trace window:")
             for service, m in context.get("service_metrics", {}).items():
-                lines.append(f"- {service}: {m}")
+                lines.append(_format_service_row(service, m))
 
     if "resource_summary" in context:
-        lines.append("\nRESOURCE SUMMARY (per service: cpu, memory, request_rate, error_rate, p95_latency_ms):")
+        lines.append("\nRESOURCE SUMMARY (one line per service):")
         for row in context["resource_summary"]:
-            lines.append(f"- {row}")
+            lines.append(_format_service_row(row["service"], row))
 
     if "metrics" in context:
-        lines.append(f"\n{context['service']} metrics: {context['metrics']}")
+        lines.append(f"\n{context['service']} metrics:")
+        lines.append(_format_service_row(context["service"], context["metrics"]))
 
     if context.get("logs"):
         lines.append(f"\nRECENT LOGS ({len(context['logs'])}):")

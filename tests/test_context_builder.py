@@ -1,7 +1,7 @@
 """Live check (against the real running stack) that context_builder fetches real
 telemetry into the right shape per question type -- this is what keeps the analyst
 grounded, so the test asserts on the ACTUAL structure the LLM prompt gets built from."""
-from agents.context_builder import build_context, render_context
+from agents.context_builder import _format_service_row, build_context, render_context
 from agents.schemas import AgentState
 
 FIXTURE_TRACE_ID = "aa0a3d4773fc332d7590ef1d79c5937a"  # same real trace used in test_retrieval.py
@@ -37,6 +37,23 @@ def test_trace_question_builds_span_tree_and_service_metrics():
     assert "payment" in context["service_metrics"]
     rendered = render_context(context)
     assert FIXTURE_TRACE_ID in rendered
+
+
+def test_format_service_row_labels_each_field_explicitly():
+    # Real LLM-testing bug: two services with distinct error_rates got dumped as raw dicts
+    # and deepseek-chat misattributed one service's error_rate to the other. Explicit
+    # per-field labels next to the service name are the fix -- lock the format in.
+    row = {
+        "cpu": {"avg_pct": 1.0, "peak_pct": 2.0},
+        "memory": {"avg_pct": 80.0, "peak_pct": 81.0, "used_bytes": 117411840, "limit_bytes": 146800640},
+        "request_rate": 0.3,
+        "p95_latency_ms": 12.5,
+        "error_rate": 0.07,
+    }
+    rendered = _format_service_row("accounting", row)
+    assert rendered.startswith("- accounting:")
+    assert "error_rate=7.0%" in rendered
+    assert "112MiB/140MiB" in rendered
 
 
 def test_widen_on_retry_doubles_the_general_window():

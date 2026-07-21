@@ -21,6 +21,7 @@ Rules:
 - risk_level reflects blast radius (adding monitoring = low; changing resource limits or core logic = medium/high).
 - For unusual issues where you'd benefit from external best practices, you may use web search and cite sources in references.
 - Be concise and specific. A tired on-call engineer should get the answer in seconds.
+- Put the concrete numbers directly in the `answer` field itself, not only in findings/evidence — the user reads `answer` first and it must stand alone (e.g. "payment averages 0.5% CPU, 80/140MiB memory → over-provisioned on CPU").
 
 Return JSON matching the AnalystAnswer schema. The `answer` field is what the user reads; findings/recommendations are the structured backup."""
 

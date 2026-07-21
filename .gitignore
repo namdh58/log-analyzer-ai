@@ -5,3 +5,4 @@ __pycache__/
 .venv/
 venv/
 chaos/injected_events.log
+results/analysis_history.jsonl

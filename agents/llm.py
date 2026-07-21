@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -45,6 +46,16 @@ class _Usage:
 usage = _Usage()  # module-level counter; the demo runner prints str(usage) after a run
 
 
+_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*\n(.*)\n```$", re.DOTALL)
+
+
+def _parse_json(text: str) -> dict:
+    # openrouter/ollama models routinely wrap JSON in markdown fences even in JSON mode --
+    # strip it rather than trusting the mode flag to be honored.
+    match = _JSON_FENCE_RE.match(text.strip())
+    return json.loads(match.group(1) if match else text)
+
+
 def _schema_tool(schema: type[BaseModel]) -> dict:
     input_schema = schema.model_json_schema()
     input_schema.pop("title", None)
@@ -65,11 +76,11 @@ def complete(
     """Fast/smart tier text or (if `schema`) a validated instance of it. 1 retry on
     schema-validation failure, shared across providers."""
     attempts = 2 if schema else 1
-    last_err: ValidationError | None = None
+    last_err: Exception | None = None
     for _ in range(attempts):
         try:
             return _dispatch(system, user, model_tier, schema, enable_web_search)
-        except ValidationError as e:
+        except (ValidationError, json.JSONDecodeError) as e:
             last_err = e
             user = f"{user}\n\n(Previous attempt returned invalid JSON: {e}. Return ONLY valid JSON matching the schema.)"
     raise last_err  # type: ignore[misc]
@@ -159,7 +170,7 @@ def _complete_openrouter(system, user, schema):
     u = data.get("usage", {})
     usage.add(u.get("prompt_tokens", 0), u.get("completion_tokens", 0))
     if schema:
-        return schema.model_validate(json.loads(text))
+        return schema.model_validate(_parse_json(text))
     return text
 
 
@@ -181,5 +192,5 @@ def _complete_ollama(system, user, schema):
     text = data["message"]["content"]
     usage.add(data.get("prompt_eval_count", 0), data.get("eval_count", 0))
     if schema:
-        return schema.model_validate(json.loads(text))
+        return schema.model_validate(_parse_json(text))
     return text
