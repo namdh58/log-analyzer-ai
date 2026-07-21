@@ -1,7 +1,7 @@
 """Deterministic tests for orchestrator wiring -- no LLM calls, no network for the graph
 plumbing itself. The "scheduled -> zero signals -> zero LLM calls" test monkeypatches
 SignalDetector; the graph-execution tests stub out run_analyst/build_graph so a missing
-ANTHROPIC_API_KEY/OPENROUTER_API_KEY can't make these fail."""
+ANTHROPIC_API_KEY/DEEPSEEK_API_KEY can't make these fail."""
 from agents import orchestrator
 from agents.schemas import AgentState, AnalystAnswer
 from detection.signal_detector import SignalDetector

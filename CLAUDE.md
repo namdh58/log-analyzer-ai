@@ -24,10 +24,11 @@ Must actually run end-to-end (no full mocks). Not production. All user-facing te
 | Logs | OTel Collector → **Loki** via native OTLP ingestion (replaces demo's OpenSearch) |
 | Dashboards | Grafana (ships with demo; add Tempo+Loki datasources) |
 | Agent orchestration | LangGraph |
-| LLM | Pluggable via `LLM_PROVIDER`: `anthropic` (default) · `openrouter` (session addition) · `ollama` (local) |
+| LLM | Pluggable via `LLM_PROVIDER`: `anthropic` (default) · `deepseek` (native API, session addition) · `ollama` (local) |
 | Anthropic models | fast (light tasks): `claude-haiku-4-5` · smart (analysis): `claude-sonnet-4-6` |
-| OpenRouter fallback | `deepseek/deepseek-chat` via https://openrouter.ai — used when no `ANTHROPIC_API_KEY` is available yet. Same tier for fast/smart. No web search in this mode. |
-| Ollama fallback | `qwen2.5:7b-instruct` (fits RTX 3080 8GB, JSON mode). No web search in this mode. |
+| DeepSeek fallback | `deepseek-chat` via native https://api.deepseek.com (OpenAI-compatible, openai SDK). Same tier for fast/smart. |
+| Ollama fallback | `qwen2.5:7b-instruct` (fits RTX 3080 8GB, JSON mode). |
+| Web search | Separate axis via `SEARCH_PROVIDER`: `none` (default) · `tavily` (client-side tool-calling, works with any LLM_PROVIDER) · `anthropic` (native server-side tool, only meaningful when `LLM_PROVIDER=anthropic`). See `agents/search.py`. |
 | PII masking | Regex-based (skip Presidio — too heavy for demo) |
 
 ## Repo layout
@@ -41,7 +42,7 @@ observability-ai-copilot/
 │   └── scenarios.py            # 4 named scenarios (see Scenarios)
 ├── retrieval/                  # log_client.py  metric_client.py  trace_client.py  masking.py
 ├── detection/                  # signal_detector.py  service_map.yaml  config.yaml
-├── agents/                     # schemas.py  llm.py  context_builder.py  analyst.py  orchestrator.py
+├── agents/                     # schemas.py  llm.py  search.py  context_builder.py  analyst.py  orchestrator.py
 ├── interfaces/dashboard/       # app.py (FastAPI)  static/index.html
 ├── results/                    # analysis_history.jsonl
 ├── scripts/                    # run_demo.py  scheduled_scan.py
@@ -50,12 +51,14 @@ observability-ai-copilot/
 
 ## Env vars (.env — always keep .env.example in sync)
 ```
-LLM_PROVIDER=anthropic          # anthropic | openrouter | ollama
+LLM_PROVIDER=anthropic          # anthropic | deepseek | ollama
 ANTHROPIC_API_KEY=
-OPENROUTER_API_KEY=             # openrouter provider (deepseek/deepseek-chat), no web search
-OPENROUTER_MODEL=deepseek/deepseek-chat
+DEEPSEEK_API_KEY=               # deepseek provider, native https://api.deepseek.com (OpenAI-compatible)
+DEEPSEEK_MODEL=deepseek-chat
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b-instruct
+SEARCH_PROVIDER=none            # none | tavily | anthropic -- independent of LLM_PROVIDER
+TAVILY_API_KEY=                 # required when SEARCH_PROVIDER=tavily
 LOKI_URL=http://localhost:3100
 PROMETHEUS_URL=http://localhost:9090
 TEMPO_URL=http://localhost:3200
