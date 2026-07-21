@@ -13,12 +13,37 @@ from langgraph.graph import END, StateGraph
 
 from agents.analyst import analyze as run_analyst
 from agents.context_builder import build_context
+from agents.resolve import resolve as resolve_question
 from agents.schemas import AgentState
 from detection.signal_detector import SignalDetector
 
 _TRACE_ID_RE = re.compile(r"\b[0-9a-f]{32}\b", re.IGNORECASE)
 _HISTORY_PATH = Path(__file__).parent.parent / "results" / "analysis_history.jsonl"
+_CONVERSATIONS_DIR = Path(__file__).parent.parent / "results" / "conversations"
+_MEMORY_TURNS = 4
 _SCHEDULED_WINDOW_S = 900
+
+
+def _load_memory(conversation_id: str) -> list[dict]:
+    path = _CONVERSATIONS_DIR / f"{conversation_id}.jsonl"
+    if not path.exists():
+        return []
+    lines = path.read_text().strip().splitlines()[-_MEMORY_TURNS:]
+    turns = [json.loads(line) for line in lines]
+    return [{"question": t["raw_q"], "answer_summary": t["answer_summary"]} for t in turns]
+
+
+def _persist_conversation_turn(state: AgentState) -> None:
+    _CONVERSATIONS_DIR.mkdir(parents=True, exist_ok=True)
+    record = {
+        "ts": time.time(),
+        "raw_q": state.question,
+        "resolved_q": state.resolved_question,
+        "answer": state.answer.model_dump(),
+        "answer_summary": state.answer.answer[:400],
+    }
+    with (_CONVERSATIONS_DIR / f"{state.conversation_id}.jsonl").open("a") as f:
+        f.write(json.dumps(record) + "\n")
 
 
 def _needs_more_data(state: AgentState) -> bool:
@@ -94,10 +119,14 @@ def build_graph():
 
 def run(state: AgentState) -> AgentState:
     """Entry point. Resolves trigger_type per PHASE3.md 3.5, then runs the graph."""
-    if state.trigger_type == "user_question" and state.question and not state.trace_id:
-        match = _TRACE_ID_RE.search(state.question)
-        if match:
-            state = state.model_copy(update={"trace_id": match.group(0)})
+    if state.trigger_type == "user_question" and state.question:
+        history = _load_memory(state.conversation_id) if state.conversation_id else []
+        resolved = resolve_question(state.question, history)
+        state = state.model_copy(update={"history": history, "resolved_question": resolved})
+        if not state.trace_id:
+            match = _TRACE_ID_RE.search(resolved)
+            if match:
+                state = state.model_copy(update={"trace_id": match.group(0)})
 
     if state.trigger_type == "scheduled":
         end = time.time()
@@ -109,5 +138,7 @@ def run(state: AgentState) -> AgentState:
             update={"signals": [s.model_dump() for s in signals], "time_range": (str(start), str(end))}
         )
 
-    result = build_graph().invoke(state)
-    return AgentState(**result)
+    result_state = AgentState(**build_graph().invoke(state))
+    if result_state.trigger_type == "user_question" and result_state.conversation_id and result_state.answer:
+        _persist_conversation_turn(result_state)
+    return result_state

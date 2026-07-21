@@ -46,7 +46,11 @@ def _service_metrics(service: str, start: float, end: float) -> dict:
 
 
 def build_context(state) -> dict:
-    """state: an AgentState (or anything with .trace_id/.question/.time_range/.signals/.loop_count)."""
+    """state: an AgentState (or anything with .trace_id/.question/.time_range/.signals/.loop_count).
+
+    Uses resolved_question (if set) rather than the raw question, so a follow-up like "what
+    about checkout?" fetches checkout's telemetry, not payment's. Resolution must happen
+    before this runs -- see agents/orchestrator.py."""
     widen = 2**state.loop_count  # widen the window on each analyst retry (hard-capped at 2 by the orchestrator)
     context: dict = {"signals": state.signals}
 
@@ -54,7 +58,8 @@ def build_context(state) -> dict:
         context.update(_trace_context(state.trace_id))
         return context
 
-    named_service = _find_named_service(state.question)
+    question = getattr(state, "resolved_question", None) or state.question
+    named_service = _find_named_service(question)
     end = time.time()
     if state.time_range:
         start, end = float(state.time_range[0]), float(state.time_range[1])

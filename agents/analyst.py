@@ -1,6 +1,7 @@
 """The single core Infrastructure Analyst agent. Tier: smart. See docs/PHASE3.md 3.4."""
 from agents.context_builder import render_context
 from agents.llm import complete
+from agents.resolve import render_memory
 from agents.schemas import AgentState, AnalystAnswer
 
 SYSTEM_PROMPT = """You are an Infrastructure Analyst copilot for a containerized microservice system (Astronomy Shop: frontend, cart, checkout, payment, shipping, currency, recommendation, ad, product-catalog; gRPC/HTTP; Kafka between checkout and accounting/fraud-detection). Each service runs in a container with CPU and memory LIMITS, like a resource-capped server.
@@ -32,7 +33,15 @@ def analyze(state: AgentState) -> AnalystAnswer:
     elif state.trigger_type == "scheduled":
         question = "A routine scan detected an anomaly. Investigate the signals below and explain what's happening."
     else:
-        question = state.question or "How is the system doing?"
+        question = state.resolved_question or state.question or "How is the system doing?"
 
     user = f"Question: {question}\n\n{render_context(state.context)}"
-    return complete(SYSTEM_PROMPT, user, model_tier="smart", schema=AnalystAnswer, enable_web_search=True)
+    system = SYSTEM_PROMPT
+    if state.history:
+        user = f"CONVERSATION MEMORY (reference only -- resolve pronouns/follow-ups with it, never quote numbers from it):\n{render_memory(state.history)}\n\n{user}"
+        system += (
+            "\n\nYou are in an ongoing conversation. Prior turns are provided ONLY to resolve "
+            "references. Base every numeric and factual claim on the CURRENT telemetry bundle, "
+            "never on earlier turns."
+        )
+    return complete(system, user, model_tier="smart", schema=AnalystAnswer, enable_web_search=True)

@@ -42,3 +42,8 @@ class AgentState(BaseModel):
     context: dict = {}
     answer: Optional[AnalystAnswer] = None
     loop_count: int = 0
+    # Bounded multi-turn (Phase 4 enhancement). Orchestration state only -- never part of
+    # AnalystAnswer, so Phase 5's schema contract is unaffected.
+    conversation_id: Optional[str] = None
+    history: list[dict] = []  # last-N {question, answer_summary}, reference only
+    resolved_question: Optional[str] = None
