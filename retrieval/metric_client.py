@@ -20,6 +20,16 @@ _STEP = 15  # seconds between samples in a range query
 # near-baseline. "2m" is the minimum that reliably has data without washing out a spike.
 _KAFKA_RATE_WINDOW = "2m"
 
+# App/business containers (excludes observability + infra plumbing: prometheus, grafana,
+# tempo, loki, otel-collector, jaeger, flagd, flagd-ui, kafka, postgresql, valkey-cart,
+# load-generator, llm). Verified against `docker compose config --services` + real
+# container_name labels on container_cpu_utilization_ratio/container_memory_percent_ratio.
+RESOURCE_SERVICES = [
+    "frontend", "frontend-proxy", "cart", "checkout", "payment", "shipping",
+    "currency", "recommendation", "ad", "product-catalog", "accounting",
+    "fraud-detection", "email", "quote", "image-provider", "product-reviews",
+]
+
 
 class MetricClient:
     def __init__(self, base_url: str = PROMETHEUS_URL):
@@ -81,6 +91,64 @@ class MetricClient:
     def get_kafka_consume_rate(self, start: float, end: float) -> float:
         values = self._range_values("sum(kafka_consumer_records_consumed_rate)", start, end)
         return sum(values) / len(values) if values else 0.0
+
+    def get_cpu_usage(self, service: str, start: float, end: float) -> dict:
+        # ponytail: no container in this compose has a real CPU quota (verified via
+        # `docker inspect` -- NanoCpus=0 on every service), so "% of limit" has no literal
+        # meaning for CPU here (unlike memory, which has real deploy.resources.limits).
+        # container_cpu_utilization_ratio is % of one host core and can exceed 100 on a
+        # multi-core host (verified: `ad` hits ~374% during the adHighCpu scenario). We
+        # treat 100 (one core) as a nominal budget so avg_pct/peak_pct stay comparable to
+        # memory's real vs-limit numbers. Upgrade: if the compose ever sets real `cpus:`
+        # limits, switch this to actual %-of-quota.
+        values = self._range_values(f'container_cpu_utilization_ratio{{container_name="{service}"}}', start, end)
+        if not values:
+            return {"avg_pct": None, "peak_pct": None}
+        return {"avg_pct": sum(values) / len(values), "peak_pct": max(values)}
+
+    def get_memory_usage(self, service: str, start: float, end: float) -> dict:
+        pct = self._range_values(f'container_memory_percent_ratio{{container_name="{service}"}}', start, end)
+        if not pct:
+            return {"avg_pct": None, "peak_pct": None, "used_bytes": None, "limit_bytes": None}
+        used = self._range_values(f'container_memory_usage_total_bytes{{container_name="{service}"}}', start, end)
+        limit = self._range_values(f'container_memory_usage_limit_bytes{{container_name="{service}"}}', start, end)
+        return {
+            "avg_pct": sum(pct) / len(pct),
+            "peak_pct": max(pct),
+            "used_bytes": used[-1] if used else None,
+            "limit_bytes": limit[-1] if limit else None,
+        }
+
+    def get_resource_summary(self, start: float, end: float) -> list[dict]:
+        """One row per RESOURCE_SERVICES entry: cpu%, mem%, request_rate, p95 latency,
+        error_rate. Never raises -- a missing/unavailable metric for one service degrades
+        to None on that field rather than failing the whole summary."""
+        rows = []
+        for service in RESOURCE_SERVICES:
+            row = {"service": service}
+            try:
+                row["cpu"] = self.get_cpu_usage(service, start, end)
+            except Exception:
+                row["cpu"] = {"avg_pct": None, "peak_pct": None}
+            try:
+                row["memory"] = self.get_memory_usage(service, start, end)
+            except Exception:
+                row["memory"] = {"avg_pct": None, "peak_pct": None, "used_bytes": None, "limit_bytes": None}
+            try:
+                row["request_rate"] = self.get_request_rate(service, start, end)
+            except Exception:
+                row["request_rate"] = None
+            try:
+                p95 = self.get_latency_p95(service, start, end)
+                row["p95_latency_ms"] = sum(p95) / len(p95) if p95 else None
+            except Exception:
+                row["p95_latency_ms"] = None
+            try:
+                row["error_rate"] = self.get_error_rate(service, start, end)
+            except Exception:
+                row["error_rate"] = None
+            rows.append(row)
+        return rows
 
     def get_baseline(self, service: str, metric: str, before: float | None = None) -> float:
         """Median of `metric` (a getter name on this class) over the 30 min preceding `before`
