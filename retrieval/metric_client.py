@@ -6,8 +6,15 @@ import requests
 
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
 
-_RATE_WINDOW = "1m"  # lookback used inside rate(); independent of the caller's [start,end]
+# The collector's spanmetrics/kafka export cycle pushes fresh values roughly every 60s
+# (verified empirically -- NOT the ~15s originally assumed). A rate() lookback close to
+# that cadence frequently contains <2 real samples depending on query alignment and
+# silently returns *no data point at all* (not a zero) -- seen intermittently on
+# traces_span_metrics_* and reliably on kafka_message_count_total. Windows are widened
+# well past 60s so there are always >=2 real samples regardless of alignment.
+_RATE_WINDOW = "2m"  # lookback used inside rate(); independent of the caller's [start,end]
 _STEP = 15  # seconds between samples in a range query
+_KAFKA_RATE_WINDOW = "5m"
 
 
 class MetricClient:
@@ -64,7 +71,7 @@ class MetricClient:
         return sum(values) / len(values) if values else 0.0
 
     def get_kafka_publish_rate(self, start: float, end: float) -> float:
-        values = self._range_values(f"sum(rate(kafka_message_count_total[{_RATE_WINDOW}]))", start, end)
+        values = self._range_values(f"sum(rate(kafka_message_count_total[{_KAFKA_RATE_WINDOW}]))", start, end)
         return sum(values) / len(values) if values else 0.0
 
     def get_kafka_consume_rate(self, start: float, end: float) -> float:

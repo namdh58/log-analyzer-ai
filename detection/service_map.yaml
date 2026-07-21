@@ -1,0 +1,7 @@
+# Which child services/spans are expected under each parent, for span_gap detection.
+# Kept small on purpose (CLAUDE.md/PHASE2): only services the 4 chaos scenarios touch,
+# and only entries we actually assert on (PHASE2.md: "add ... only if you actually assert
+# on them"). No `frontend` entry: a frontend-rooted trace doesn't always call
+# cart/product-catalog/recommendation/ad together, so requiring all of them per-trace
+# would be a guaranteed false positive on ordinary browsing traffic.
+checkout: [cart, payment, shipping, currency, kafka]

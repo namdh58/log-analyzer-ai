@@ -53,7 +53,9 @@ def test_trace_client_builds_correct_span_tree():
 
 def test_metric_client_returns_real_numbers():
     end = time.time()
-    start = end - 300
+    # Real checkout traffic in this env is sparse (~0.3-0.4 req/s, verified empirically) --
+    # a 5 min window can land on zero checkout calls by chance, so use a wider one.
+    start = end - 900
     client = MetricClient()
 
     p95 = client.get_latency_p95("checkout", start, end)

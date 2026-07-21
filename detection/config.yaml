@@ -1,0 +1,29 @@
+# Signal detection thresholds. Tune here, not in code.
+latency_spike:
+  baseline_multiplier: 2.0
+  # Below this, quiet-window quantile noise on low-traffic services (e.g. `ad`) crosses
+  # the multiplier by chance (verified empirically: 10.8ms baseline -> 38ms sample, no
+  # chaos running). Real overload-scenario spikes are far above this floor.
+  min_absolute_ms: 50
+error_rate_spike:
+  baseline_multiplier: 3.0
+  absolute_floor: 0.10
+queue_anomaly:
+  # publish-vs-consume ratio is NOT used to fire: kafka_message_count_total (broker-wide)
+  # and kafka_consumer_records_consumed_rate (fraud-detection client-reported) are on
+  # different scales and sit ~9x apart even in a quiet window with zero chaos (verified
+  # empirically). Baseline-vs-current publish rate is the only reliable signal here,
+  # matching the Phase-1 finding in PROGRESS.md (~35x flood on kafkaQueueProblems).
+  publish_baseline_multiplier: 3.0
+throughput_drop:
+  baseline_ratio: 0.5
+  # Below this req/s, a service is called so rarely (verified empirically: ad/payment/
+  # shipping/currency all sit under ~0.08 req/s baseline) that a quiet 5-10 min window can
+  # legitimately see zero calls by chance, making the ratio meaningless noise.
+  min_absolute_baseline_rate: 0.15
+
+baseline_window_seconds: 1800
+# Services checked for latency_spike / error_rate_spike / throughput_drop.
+# Derived from service_map.yaml's parents + children, minus non-services (kafka is a broker,
+# not something with traces_span_metrics).
+services: [frontend, checkout, cart, product-catalog, recommendation, ad, payment, shipping, currency]
