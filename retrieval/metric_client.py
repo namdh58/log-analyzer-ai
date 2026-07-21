@@ -1,5 +1,6 @@
 """Prometheus HTTP API client."""
 import os
+import statistics
 import time
 
 import requests
@@ -14,7 +15,10 @@ PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://localhost:9090")
 # well past 60s so there are always >=2 real samples regardless of alignment.
 _RATE_WINDOW = "2m"  # lookback used inside rate(); independent of the caller's [start,end]
 _STEP = 15  # seconds between samples in a range query
-_KAFKA_RATE_WINDOW = "5m"
+# kafka_message_count_total needs the same >=60s margin as above; "1m" still returned zero
+# samples empirically (verified), and "5m" over-dilutes a real short flood burst down to
+# near-baseline. "2m" is the minimum that reliably has data without washing out a spike.
+_KAFKA_RATE_WINDOW = "2m"
 
 
 class MetricClient:
@@ -79,11 +83,16 @@ class MetricClient:
         return sum(values) / len(values) if values else 0.0
 
     def get_baseline(self, service: str, metric: str, before: float | None = None) -> float:
-        """Mean of `metric` (a getter name on this class) over the 30 min preceding `before` (default: now)."""
+        """Median of `metric` (a getter name on this class) over the 30 min preceding `before`
+        (default: now). Median, not mean -- some services (e.g. `ad`) have real periodic
+        multi-second GC-pause latency blips every ~10 min (verified: container memory pinned
+        at its limit) that would otherwise drag a mean baseline high enough to mask a real
+        chaos-induced spike sitting well above the service's *typical* latency.
+        """
         before = before if before is not None else time.time()
         start = before - 1800
         getter = getattr(self, metric)
         values = getter(service, start, before) if service else getter(start, before)
         if isinstance(values, list):
-            return sum(values) / len(values) if values else 0.0
+            return statistics.median(values) if values else 0.0
         return values
