@@ -6,7 +6,7 @@ import yaml
 from pydantic import BaseModel
 
 from retrieval.log_client import LogClient
-from retrieval.metric_client import MetricClient
+from retrieval.metric_client import RESOURCE_SERVICES, MetricClient
 from retrieval.trace_client import TraceClient
 
 _DIR = Path(__file__).parent
@@ -14,7 +14,7 @@ _ACCESS_LOG_RE = re.compile(r'"(?:GET|POST|PUT|DELETE|PATCH) (\S+) HTTP/[\d.]+" 
 
 
 class Signal(BaseModel):
-    signal_type: str  # latency_spike | error_rate_spike | span_gap | queue_anomaly | throughput_drop
+    signal_type: str  # latency_spike | error_rate_spike | span_gap | queue_anomaly | throughput_drop | cpu_high | memory_high
     confidence: float
     affected_services: list[str]
     affected_trace_ids: list[str] = []
@@ -50,6 +50,8 @@ class SignalDetector:
         signals += self._check_span_gap(start, end)
         signals += self._check_queue_anomaly(start, end)
         signals += self._check_throughput_drop(start, end)
+        signals += self._check_cpu_high(start, end)
+        signals += self._check_memory_high(start, end)
         return signals
 
     def _example_traces(self, start, end, service):
@@ -189,6 +191,51 @@ class SignalDetector:
                 window=(start, end),
             )
         ]
+
+    def _check_cpu_high(self, start, end) -> list[Signal]:
+        threshold = self.config["cpu_high"]["threshold_pct"]
+        signals = []
+        for service in RESOURCE_SERVICES:
+            usage = self.metrics.get_cpu_usage(service, start, end)
+            avg = usage["avg_pct"]
+            if avg is None or avg <= threshold:
+                continue
+            signals.append(
+                Signal(
+                    signal_type="cpu_high",
+                    confidence=min(1.0, avg / threshold),
+                    affected_services=[service],
+                    affected_trace_ids=self._example_traces(start, end, service),
+                    metric_values={"avg_cpu_pct": avg, "peak_cpu_pct": usage["peak_pct"]},
+                    window=(start, end),
+                )
+            )
+        return signals
+
+    def _check_memory_high(self, start, end) -> list[Signal]:
+        threshold = self.config["memory_high"]["threshold_pct"]
+        signals = []
+        for service in RESOURCE_SERVICES:
+            usage = self.metrics.get_memory_usage(service, start, end)
+            avg = usage["avg_pct"]
+            if avg is None or avg <= threshold:
+                continue
+            signals.append(
+                Signal(
+                    signal_type="memory_high",
+                    confidence=min(1.0, avg / threshold),
+                    affected_services=[service],
+                    affected_trace_ids=self._example_traces(start, end, service),
+                    metric_values={
+                        "avg_memory_pct": avg,
+                        "peak_memory_pct": usage["peak_pct"],
+                        "used_bytes": usage["used_bytes"],
+                        "limit_bytes": usage["limit_bytes"],
+                    },
+                    window=(start, end),
+                )
+            )
+        return signals
 
     def _check_span_gap(self, start, end) -> list[Signal]:
         signals = []

@@ -22,6 +22,15 @@ throughput_drop:
   # legitimately see zero calls by chance, making the ratio meaningless noise.
   min_absolute_baseline_rate: 0.15
 
+cpu_high:
+  # No container in this compose has a real CPU quota (verified: `docker inspect` shows
+  # NanoCpus=0 everywhere) -- 80 is a nominal "one core" budget, not a real limit. See
+  # ponytail note on MetricClient.get_cpu_usage.
+  threshold_pct: 80
+memory_high:
+  # Real limit, from each service's deploy.resources.limits.memory.
+  threshold_pct: 90
+
 baseline_window_seconds: 1800
 # Services checked for latency_spike / error_rate_spike / throughput_drop.
 # Derived from service_map.yaml's parents + children, minus non-services (kafka is a broker,
