@@ -31,6 +31,11 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 # Native DeepSeek API by default; overridable so a key from an OpenAI-compatible reseller
 # (e.g. OpenRouter, model "deepseek/deepseek-chat") can be used instead without touching code.
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+# Real AnalystAnswer responses run a few hundred to ~1000 tokens; without an explicit cap,
+# OpenRouter defaults to the model's max (16000+) and rejects the request outright once the
+# account's remaining balance can't cover that worst case, even though the actual usage is
+# tiny. Capping this also just reduces cost per call.
+_DEEPSEEK_MAX_TOKENS = 4096
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5:7b-instruct")
 
@@ -189,7 +194,7 @@ def _complete_deepseek(system, user, schema, enable_web_search):
     messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
     if schema is None and not use_search:
-        resp = client.chat.completions.create(model=DEEPSEEK_MODEL, messages=messages)
+        resp = client.chat.completions.create(model=DEEPSEEK_MODEL, messages=messages, max_tokens=_DEEPSEEK_MAX_TOKENS)
         usage.add(resp.usage.prompt_tokens, resp.usage.completion_tokens)
         return resp.choices[0].message.content
 
@@ -199,7 +204,7 @@ def _complete_deepseek(system, user, schema, enable_web_search):
     if use_search:
         tools.append(_DEEPSEEK_SEARCH_TOOL)
 
-    kwargs: dict = {"model": DEEPSEEK_MODEL, "messages": messages, "tools": tools}
+    kwargs: dict = {"model": DEEPSEEK_MODEL, "messages": messages, "tools": tools, "max_tokens": _DEEPSEEK_MAX_TOKENS}
     kwargs["tool_choice"] = "auto" if use_search else {"type": "function", "function": {"name": "submit_answer"}}
 
     for _ in range(6):
