@@ -1,7 +1,7 @@
 """Live check (against the real running stack) that context_builder fetches real
 telemetry into the right shape per question type -- this is what keeps the analyst
 grounded, so the test asserts on the ACTUAL structure the LLM prompt gets built from."""
-from agents.context_builder import _format_service_row, build_context, render_context
+from agents.context_builder import _find_named_services, _format_service_row, build_context, render_context
 from agents.schemas import AgentState
 
 FIXTURE_TRACE_ID = "aa0a3d4773fc332d7590ef1d79c5937a"  # same real trace used in test_retrieval.py
@@ -54,6 +54,32 @@ def test_format_service_row_labels_each_field_explicitly():
     assert rendered.startswith("- accounting:")
     assert "error_rate=7.0%" in rendered
     assert "112MiB/140MiB" in rendered
+
+
+def test_comparison_question_pulls_fresh_metrics_for_both_named_services():
+    # Multi-turn enhancement: "which of those two has less headroom?" resolves to a
+    # question naming both services -- context_builder must fetch FRESH telemetry for
+    # both, not just the first match, or the analyst falls back to stale memory numbers
+    # for the second one.
+    state = AgentState(
+        trigger_type="user_question",
+        question="which has less headroom?",
+        resolved_question="Which service has less headroom, the payment service or the checkout service?",
+    )
+    context = build_context(state)
+    assert context["mode"] == "services"
+    assert context["services"] == ["payment", "checkout"]
+    assert set(context["metrics_by_service"]) == {"payment", "checkout"}
+    assert context["metrics_by_service"]["payment"]["memory"]["avg_pct"] is not None
+    assert context["metrics_by_service"]["checkout"]["memory"]["avg_pct"] is not None
+    rendered = render_context(context)
+    assert "- payment:" in rendered
+    assert "- checkout:" in rendered
+
+
+def test_find_named_services_orders_by_question_position_not_list_order():
+    # checkout sits before payment in RESOURCE_SERVICES, but the question says payment first.
+    assert _find_named_services("compare payment and checkout") == ["payment", "checkout"]
 
 
 def test_widen_on_retry_doubles_the_general_window():

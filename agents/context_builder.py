@@ -20,12 +20,27 @@ _logs = LogClient()
 
 
 def _find_named_service(question: str | None) -> str | None:
+    services = _find_named_services(question)
+    return services[0] if services else None
+
+
+def _find_named_services(question: str | None) -> list[str]:
+    """All RESOURCE_SERVICES named in the question, in question order (not list order) --
+    a comparison like "payment or checkout?" must fetch fresh telemetry for BOTH, not just
+    whichever service happens first in RESOURCE_SERVICES."""
     if not question:
-        return None
-    for service in RESOURCE_SERVICES:
-        if re.search(rf"\b{re.escape(service)}\b", question, re.IGNORECASE):
-            return service
-    return None
+        return []
+    matches = [
+        (m.start(), service)
+        for service in RESOURCE_SERVICES
+        for m in re.finditer(rf"\b{re.escape(service)}\b", question, re.IGNORECASE)
+    ]
+    ordered = [service for _, service in sorted(matches, key=lambda x: x[0])]
+    seen: list[str] = []
+    for service in ordered:
+        if service not in seen:
+            seen.append(service)
+    return seen
 
 
 def _flatten(node):
@@ -59,20 +74,31 @@ def build_context(state) -> dict:
         return context
 
     question = getattr(state, "resolved_question", None) or state.question
-    named_service = _find_named_service(question)
+    named_services = _find_named_services(question)
     end = time.time()
     if state.time_range:
         start, end = float(state.time_range[0]), float(state.time_range[1])
-    elif named_service:
+    elif named_services:
         start = end - _BASE_SERVICE_WINDOW_S * widen
     else:
         start = end - _BASE_GENERAL_WINDOW_S * widen
 
-    if named_service:
+    if len(named_services) > 1:
+        # Comparison question ("payment or checkout, which has less headroom?") -- fetch
+        # FRESH telemetry for every named service, not just the first match, so the analyst
+        # never has to fall back on a prior turn's numbers for the second service.
+        context["mode"] = "services"
+        context["services"] = named_services
+        context["metrics_by_service"] = {svc: _service_metrics(svc, start, end) for svc in named_services}
+        logs = []
+        for svc in named_services:
+            logs += _logs.get_logs_by_time_range(start, end, service=svc)
+        context["logs"] = _render_logs(logs)
+    elif named_services:
         context["mode"] = "service"
-        context["service"] = named_service
-        context["metrics"] = _service_metrics(named_service, start, end)
-        context["logs"] = _render_logs(_logs.get_logs_by_time_range(start, end, service=named_service))
+        context["service"] = named_services[0]
+        context["metrics"] = _service_metrics(named_services[0], start, end)
+        context["logs"] = _render_logs(_logs.get_logs_by_time_range(start, end, service=named_services[0]))
     else:
         context["mode"] = "general"
         context["resource_summary"] = _metrics.get_resource_summary(start, end)
@@ -172,6 +198,11 @@ def render_context(context: dict) -> str:
     if "metrics" in context:
         lines.append(f"\n{context['service']} metrics:")
         lines.append(_format_service_row(context["service"], context["metrics"]))
+
+    if "metrics_by_service" in context:
+        lines.append(f"\nMETRICS for services named in this question ({', '.join(context['services'])}):")
+        for svc, m in context["metrics_by_service"].items():
+            lines.append(_format_service_row(svc, m))
 
     if context.get("logs"):
         lines.append(f"\nRECENT LOGS ({len(context['logs'])}):")

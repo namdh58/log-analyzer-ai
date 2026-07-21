@@ -6,3 +6,4 @@ __pycache__/
 venv/
 chaos/injected_events.log
 results/analysis_history.jsonl
+results/conversations/

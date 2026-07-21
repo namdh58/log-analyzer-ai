@@ -33,6 +33,11 @@ services:
   grafana:
     ports:
       - "3000:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=grafana-opensearch-datasource
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
     volumes:
       - ../overrides/grafana/tempo-datasource.yaml:/etc/grafana/provisioning/datasources/jaeger.yaml
       - ../overrides/grafana/loki-datasource.yaml:/etc/grafana/provisioning/datasources/opensearch.yaml
