@@ -9,150 +9,218 @@
     --muted: #8b90a0; --accent: #5b8cff; --crit: #ff5c6c; --warn: #ffb454; --info: #5b8cff;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
-  header { padding: 18px 24px; border-bottom: 1px solid var(--border); }
-  header h1 { margin: 0; font-size: 20px; }
-  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
-  main { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
-  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
-  .panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  html, body { height: 100%; margin: 0; }
+  body { display: flex; flex-direction: column; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
 
-  #alert-banner { display: none; background: #3a2130; border: 1px solid var(--crit); color: #ffdbe0; padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; cursor: pointer; font-size: 14px; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); flex: none; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  #new-convo-btn { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-weight: 600; cursor: pointer; }
+  #new-convo-btn:hover { background: rgba(91,140,255,.1); }
+
+  #alert-banner { display: none; background: #3a2130; border: 1px solid var(--crit); color: #ffdbe0; padding: 8px 24px; cursor: pointer; font-size: 13px; flex: none; }
   #alert-banner:hover { background: #47283a; }
 
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  #body { display: flex; flex: 1; min-height: 0; }
+
+  #sidebar { width: 260px; flex: none; border-right: 1px solid var(--border); overflow-y: auto; padding: 12px; }
+  #sidebar h2 { margin: 0 0 10px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .convo-item { padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px; margin-bottom: 4px; }
+  .convo-item:hover { background: #1e2230; }
+  .convo-item.active { background: #232c47; border: 1px solid var(--accent); }
+  .convo-item .q { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .convo-item .meta { color: var(--muted); font-size: 11px; }
+
+  #chat-col { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #chat-scroll { flex: 1; overflow-y: auto; padding: 20px 24px; }
+  #chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
   .chip { background: #232838; border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 16px; font-size: 13px; cursor: pointer; }
   .chip:hover { border-color: var(--accent); }
 
-  #ask-row { display: flex; gap: 8px; }
-  #question { flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0d0f16; color: var(--text); font-size: 14px; }
-  #ask-btn { padding: 10px 18px; border-radius: 8px; border: none; background: var(--accent); color: white; font-weight: 600; cursor: pointer; }
-  #ask-btn:disabled { opacity: .5; cursor: default; }
-
-  #status { color: var(--muted); font-size: 13px; margin-top: 10px; min-height: 18px; }
-
-  #answer-card { margin-top: 16px; display: none; }
-  #answer-text { font-size: 15px; line-height: 1.5; margin-bottom: 14px; }
+  .turn { margin-bottom: 22px; }
+  .bubble-q { display: inline-block; background: #232838; padding: 8px 14px; border-radius: 12px 12px 12px 2px; font-size: 14px; margin-bottom: 10px; }
+  .bubble-q .who { color: var(--muted); font-size: 11px; display: block; margin-bottom: 2px; }
+  .answer-card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .answer-text { font-size: 14px; line-height: 1.5; margin-bottom: 10px; }
 
   .finding, .rec { border-left: 3px solid var(--info); background: #12141c; padding: 8px 12px; border-radius: 0 6px 6px 0; margin-bottom: 8px; font-size: 13px; }
   .finding.critical, .rec.high { border-left-color: var(--crit); }
   .finding.warning, .rec.medium { border-left-color: var(--warn); }
   .finding.info, .rec.low { border-left-color: var(--info); }
-  .finding .tag, .rec .tag { display: inline-block; font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+  .finding .tag, .rec .tag { display: block; font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
   .rec .refs a { color: var(--accent); }
 
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  th { color: var(--muted); font-weight: 500; }
+  #analyzing { display: none; color: var(--muted); font-size: 13px; padding: 6px 0 16px; }
 
-  .hist-item { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-  .hist-item .q { color: var(--muted); font-size: 11px; }
-  .hist-item .t { color: var(--muted); font-size: 11px; float: right; }
+  #input-row { flex: none; display: flex; gap: 8px; padding: 14px 24px; border-top: 1px solid var(--border); }
+  #question { flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0d0f16; color: var(--text); font-size: 14px; }
+  #send-btn { padding: 10px 18px; border-radius: 8px; border: none; background: var(--accent); color: white; font-weight: 600; cursor: pointer; }
+  #send-btn:disabled, #question:disabled { opacity: .5; cursor: default; }
+
+  #grafana-section { flex: none; border-top: 1px solid var(--border); padding: 16px 24px; max-height: 46vh; overflow-y: auto; }
+  #grafana-section h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  table.quick { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 14px; }
+  table.quick th, table.quick td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.quick th { color: var(--muted); font-weight: 500; }
+  .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; }
+  .panels iframe { width: 100%; height: 260px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 </style>
 </head>
 <body>
 <header>
-  <h1>Observability AI Copilot</h1>
-  <p>Ask about failures, right-sizing, capacity, or overall health of the Astronomy Shop cluster.</p>
+  <div>
+    <h1>Observability AI Copilot</h1>
+    <p>Ask about failures, right-sizing, capacity, or overall health of the Astronomy Shop cluster.</p>
+  </div>
+  <button id="new-convo-btn">+ New Conversation</button>
 </header>
 
-<main>
-  <div>
-    <div id="alert-banner"></div>
+<div id="alert-banner"></div>
 
-    <div class="panel">
-      <h2>Ask the copilot</h2>
-      <div class="chips">
+<div id="body">
+  <div id="sidebar">
+    <h2>Conversations</h2>
+    <div id="convo-list"></div>
+  </div>
+
+  <div id="chat-col">
+    <div id="chat-scroll">
+      <div id="chips">
         <span class="chip" data-q="How is the system doing right now?">How is the system doing right now?</span>
         <span class="chip" data-q="Is payment over-provisioned?">Is payment over-provisioned?</span>
         <span class="chip" data-q="Which service will saturate first if traffic triples?">Which service will saturate first if traffic triples?</span>
         <span class="chip" data-q="What's wrong with the ad service?">What's wrong with the ad service?</span>
       </div>
-      <div id="ask-row">
-        <input id="question" type="text" placeholder="Ask a question about the cluster...">
-        <button id="ask-btn">Ask</button>
-      </div>
-      <div id="status"></div>
-
-      <div id="answer-card">
-        <div id="answer-text"></div>
-        <div id="findings"></div>
-        <div id="recommendations"></div>
-      </div>
+      <div id="turns"></div>
+      <div id="analyzing">Analyzing… (can take up to 60s)</div>
     </div>
-
-    <div class="panel">
-      <h2>Recent analyses</h2>
-      <div id="history"></div>
+    <div id="input-row">
+      <input id="question" type="text" placeholder="Ask a question about the cluster...">
+      <button id="send-btn">Send</button>
     </div>
   </div>
+</div>
 
-  <div>
-    <div class="panel">
-      <h2>Live resource utilization</h2>
-      <table id="resource-table">
-        <thead><tr><th>Service</th><th>CPU avg/peak</th><th>Mem avg/peak</th><th>Req/s</th><th>p95 ms</th><th>Err%</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </div>
-</main>
+<div id="grafana-section">
+  <h2>Live resource utilization</h2>
+  <table class="quick" id="resource-table">
+    <thead><tr><th>Service</th><th>CPU avg/peak</th><th>Mem avg/peak</th><th>Req/s</th><th>p95 ms</th><th>Err%</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="panels" id="grafana-panels"></div>
+</div>
 
 <script>
 const $ = sel => document.querySelector(sel);
 const fmt = (v, d=1, suffix='') => (v === null || v === undefined) ? '—' : v.toFixed(d) + suffix;
+const GRAFANA_BASE = 'http://localhost:3000/grafana/d-solo/ai-copilot-overview/ai-copilot?orgId=1&theme=dark&from=now-30m&to=now';
 
-async function ask(question) {
-  $('#question').value = question;
-  $('#ask-btn').disabled = true;
-  $('#status').textContent = 'Analyzing… (can take up to 60s)';
-  $('#answer-card').style.display = 'none';
+let currentConversationId = null;
+let readOnly = false;
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s ?? '';
+  return d.innerHTML;
+}
+
+function renderAnswerCard(a) {
+  const findings = (a.findings || []).map(f => `
+    <div class="finding ${esc(f.severity)}">
+      <span class="tag">${esc(f.category)}${f.service ? ' · ' + esc(f.service) : ''} · ${esc(f.severity)}</span>
+      ${esc(f.summary)}
+    </div>`).join('');
+  const recs = (a.recommendations || []).map(r => `
+    <div class="rec ${esc(r.risk_level)}">
+      <span class="tag">recommendation · ${esc(r.risk_level)} risk</span>
+      ${esc(r.action)}<br><span style="color:var(--muted)">${esc(r.rationale)}</span>
+      ${r.references && r.references.length ? `<div class="refs">${r.references.map(u => `<a href="${esc(u)}" target="_blank">${esc(u)}</a>`).join(' · ')}</div>` : ''}
+    </div>`).join('');
+  return `<div class="answer-card"><div class="answer-text">${esc(a.answer)}</div>${findings}${recs}</div>`;
+}
+
+function appendTurn(question, answer) {
+  const div = document.createElement('div');
+  div.className = 'turn';
+  div.innerHTML = `<div class="bubble-q"><span class="who">You</span>${esc(question)}</div>${renderAnswerCard(answer)}`;
+  $('#turns').appendChild(div);
+  $('#chat-scroll').scrollTop = $('#chat-scroll').scrollHeight;
+}
+
+async function send(question) {
+  if (!currentConversationId) await newConversation(false);
+  $('#question').value = '';
+  $('#send-btn').disabled = true;
+  $('#question').disabled = true;
+  $('#analyzing').style.display = 'block';
+  $('#chat-scroll').scrollTop = $('#chat-scroll').scrollHeight;
   try {
     const res = await fetch('/ask', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({question})
+      body: JSON.stringify({question, conversation_id: currentConversationId})
     });
     if (!res.ok) throw new Error(await res.text());
     const answer = await res.json();
-    renderAnswer(answer);
-    $('#status').textContent = '';
-    loadHistory();
+    appendTurn(question, answer);
+    loadConversationList();
   } catch (e) {
-    $('#status').textContent = 'Error: ' + e.message;
+    appendTurn(question, {answer: 'Error: ' + e.message, findings: [], recommendations: []});
   } finally {
-    $('#ask-btn').disabled = false;
+    $('#analyzing').style.display = 'none';
+    $('#send-btn').disabled = false;
+    $('#question').disabled = readOnly;
   }
 }
 
-function renderAnswer(a) {
-  $('#answer-text').textContent = a.answer;
-  $('#findings').innerHTML = a.findings.map(f => `
-    <div class="finding ${f.severity}">
-      <div class="tag">${f.category}${f.service ? ' · ' + f.service : ''} · ${f.severity}</div>
-      ${f.summary}
-    </div>`).join('');
-  $('#recommendations').innerHTML = a.recommendations.map(r => `
-    <div class="rec ${r.risk_level}">
-      <div class="tag">recommendation · ${r.risk_level} risk</div>
-      ${r.action}<br><span style="color:var(--muted)">${r.rationale}</span>
-      ${r.references.length ? `<div class="refs">${r.references.map(u => `<a href="${u}" target="_blank">${u}</a>`).join(' · ')}</div>` : ''}
-    </div>`).join('');
-  $('#answer-card').style.display = 'block';
+document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => send(c.dataset.q)));
+$('#send-btn').addEventListener('click', () => { const q = $('#question').value.trim(); if (q) send(q); });
+$('#question').addEventListener('keydown', e => { if (e.key === 'Enter') $('#send-btn').click(); });
+
+async function newConversation(clearChips = true) {
+  const res = await fetch('/conversations', {method: 'POST'});
+  const {conversation_id} = await res.json();
+  currentConversationId = conversation_id;
+  readOnly = false;
+  $('#turns').innerHTML = '';
+  $('#chips').style.display = clearChips ? 'flex' : 'none';
+  $('#question').disabled = false;
+  $('#question').focus();
+  const placeholder = document.createElement('div');
+  placeholder.className = 'convo-item active';
+  placeholder.dataset.id = conversation_id;
+  placeholder.innerHTML = `<span class="q">New conversation</span><span class="meta">just now</span>`;
+  placeholder.addEventListener('click', () => openConversation(conversation_id));
+  $('#convo-list').prepend(placeholder);
+  highlightActiveConversation();
+}
+$('#new-convo-btn').addEventListener('click', () => newConversation(true));
+
+async function loadConversationList() {
+  const convos = await (await fetch('/conversations')).json();
+  $('#convo-list').innerHTML = convos.map(c => `
+    <div class="convo-item" data-id="${c.conversation_id}">
+      <span class="q">${esc(c.first_question)}</span>
+      <span class="meta">${new Date(c.ts * 1000).toLocaleString()} · ${c.turn_count} turn${c.turn_count === 1 ? '' : 's'}</span>
+    </div>`).join('') || '<span style="color:var(--muted);font-size:13px">No conversations yet.</span>';
+  document.querySelectorAll('.convo-item').forEach(el => el.addEventListener('click', () => openConversation(el.dataset.id)));
+  highlightActiveConversation();
 }
 
-document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => ask(c.dataset.q)));
-$('#ask-btn').addEventListener('click', () => { const q = $('#question').value.trim(); if (q) ask(q); });
-$('#question').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ask-btn').click(); });
+function highlightActiveConversation() {
+  document.querySelectorAll('.convo-item').forEach(el => el.classList.toggle('active', el.dataset.id === currentConversationId));
+}
 
-async function loadHistory() {
-  const rows = await (await fetch('/history')).json();
-  $('#history').innerHTML = rows.map(r => `
-    <div class="hist-item">
-      <span class="t">${new Date(r.timestamp * 1000).toLocaleTimeString()}</span>
-      ${r.answer.slice(0, 140)}${r.answer.length > 140 ? '…' : ''}
-      <div class="q">${r.question || r.trigger_type}</div>
-    </div>`).join('') || '<span style="color:var(--muted)">No analyses yet.</span>';
+async function openConversation(id) {
+  const res = await fetch(`/conversations/${id}`);
+  const turns = res.ok ? await res.json() : [];  // brand-new conversation with no turns yet
+  currentConversationId = id;
+  readOnly = false; // continuing any past conversation is allowed -- the pipeline always loads its stored memory fresh
+  $('#chips').style.display = turns.length ? 'none' : 'flex';
+  $('#turns').innerHTML = '';
+  turns.forEach(t => appendTurn(t.raw_q, t.answer));
+  $('#question').disabled = false;
+  highlightActiveConversation();
 }
 
 async function loadResources() {
@@ -168,6 +236,18 @@ async function loadResources() {
     </tr>`).join('');
 }
 
+function loadGrafanaPanels() {
+  const panels = [
+    {id: 1, title: 'CPU % per service'},
+    {id: 2, title: 'Memory % per service'},
+    {id: 3, title: 'p95 latency per service'},
+    {id: 4, title: 'Error rate per service'},
+  ];
+  $('#grafana-panels').innerHTML = panels.map(p =>
+    `<iframe src="${GRAFANA_BASE}&panelId=${p.id}" title="${p.title}" loading="lazy"></iframe>`
+  ).join('');
+}
+
 let bannerAlert = null;
 async function loadAlerts() {
   const alerts = await (await fetch('/alerts')).json();
@@ -177,13 +257,17 @@ async function loadAlerts() {
   banner.textContent = `⚠ ${bannerAlert.message} — click to analyze`;
   banner.style.display = 'block';
 }
-$('#alert-banner').addEventListener('click', () => { if (bannerAlert) ask(bannerAlert.question); });
+$('#alert-banner').addEventListener('click', () => { if (bannerAlert) send(bannerAlert.question); });
 
-loadHistory();
-loadResources();
-loadAlerts();
-setInterval(loadResources, 10000);
-setInterval(loadAlerts, 15000);
+(async function init() {
+  await loadConversationList();
+  await newConversation(true);
+  loadGrafanaPanels();
+  loadResources();
+  loadAlerts();
+  setInterval(loadResources, 10000);
+  setInterval(loadAlerts, 15000);
+})();
 </script>
 </body>
 </html>
