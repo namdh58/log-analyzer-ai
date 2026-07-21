@@ -17,7 +17,7 @@ Phase 2 is mostly deterministic Python, so most of this is "run the test, see gr
 **If it's wrong:** flat list with no nesting → parent_span_id linking is broken. All-empty → Tempo query format wrong (verify the endpoint that worked in Phase 1).
 
 ## Check 3 — MetricClient returns real numbers
-**Run:** `get_latency_p95("checkout", ...)`, `get_error_rate("payment", ...)`, `get_kafka_consumer_lag(...)`.
+**Run:** `get_latency_p95("checkout", ...)`, `get_error_rate("payment", ...)`, `get_kafka_publish_rate(...)` + `get_kafka_consume_rate(...)`.
 **Expect:** plausible non-zero floats (latency in ms, error rate 0.0–1.0). During a quiet window error_rate near 0.
 **If it's wrong:** `None`/empty → PromQL uses a metric name that doesn't exist. List real metric names: `curl http://localhost:9090/api/v1/label/__name__/values | jq` and grep for latency/duration/errors.
 
@@ -31,16 +31,17 @@ For each scenario: run chaos → wait for ingest → `SignalDetector.detect(star
 
 | You run | Expected signal(s) in output |
 |---|---|
-| `payment_failure` | `error_rate_spike` (service: payment) |
-| `payment_outage` | `span_gap` (checkout→payment missing) and/or `error_rate_spike` |
-| `queue_backlog` | `queue_lag` |
+| `payment_failure` | `error_rate_spike` (service: payment) — comes from Prometheus metrics, NOT from span-error filtering (spans stay OK) |
+| `payment_outage` | `span_gap` (checkout present, payment child missing) and/or `error_rate_spike` |
+| `queue_backlog` | `queue_anomaly` (publish rate >> consume rate) |
 | `overload` | `latency_spike` and/or `throughput_drop` |
 
 Each `Signal` should carry: signal_type, confidence, affected_services (the right one), and ≥1 affected_trace_id.
 **If it's wrong:**
 - Right scenario, no signal → threshold too high, or baseline window overlaps the chaos window (baseline must be from BEFORE chaos). Print the actual metric value vs baseline vs threshold to see which.
-- `queue_lag` never fires → the Kafka lag metric isn't exposed as expected; fall back to detecting the fraud-detection "sleeping" log lines or producer-vs-consumer span counts (noted as fallback in PHASE2).
-- `span_gap` never fires → service_map.yaml service names don't match real telemetry names (e.g. `payment` vs `paymentservice`). Fix names to match reality.
+- `payment_failure` fires no signal / no affected_trace_ids → likely still trying to find error traces by span status (Phase-1 finding: payment spans stay OK). Confirm error_rate is read from Prometheus, and trace_ids come from `search_traces(window, service=payment)`, not an error_only filter.
+- `queue_anomaly` never fires → you're measuring consumer lag instead of publish-vs-consume delta. This scenario is a publish FLOOD — compare publish rate to consume rate (or publish-rate spike vs baseline). Read exact Kafka metric names from PROGRESS.md; secondary fallback is detecting the fraud-detection "sleeping"/flood log lines.
+- `span_gap` never fires → service_map.yaml names don't match real telemetry (e.g. `payment` vs `paymentservice`). Fix names to match reality. Also confirm you're pulling traces via the metric-identified window, not error_only.
 
 ## Check 6 — Quiet window is quiet
 **Run:** `detect()` over a window with NO chaos.
