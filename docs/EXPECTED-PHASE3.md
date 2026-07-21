@@ -1,59 +1,45 @@
-# EXPECTED OUTPUT — Phase 3 (Agents)
+# EXPECTED OUTPUT — Phase 3 (Infrastructure Analyst Agent)
 
-Two kinds of checks here: schema-valid JSON (deterministic — self-fixable) and anomaly classification (LLM judgment — you review a table, you don't hard-assert).
+Two kinds of checks: schema-valid JSON (deterministic — self-fixable) and answer quality (you read the answer and judge if it's grounded + useful). The analyst's `answer` field is natural language — judge it like a human would judge an on-call engineer's reply.
 
 ---
 
-## Check 1 — Each agent returns schema-valid JSON
-**Run:** each agent once with fixture input.
-**Expect:** a valid Pydantic object every time, no parse errors. Extractor → `ErrorExtraction`, RCA → `RootCauseAnalysis`, Fix → `FixRecommendation`.
-**If it's wrong:** model returned prose or broken JSON → the 1-retry-on-validation-failure isn't wired, or the prompt's "ONLY JSON" rule is being ignored. For anthropic, use tool-use/structured output (schema-enforced) rather than parsing free text.
+## Check 1 — Resource metrics are real
+**Run:** `get_resource_summary(last_15_min)` and print it.
+**Expect:** one row per service with real numbers — cpu%, mem%, request_rate, p95_latency, error_rate. Values plausible (idle services low CPU, load-genned services higher).
+**If it's wrong:** all zeros/None → PromQL metric names wrong. `curl http://localhost:9090/api/v1/label/__name__/values | jq` and grep for `container_cpu`, `container_memory`, `container_spec` — cAdvisor-style names. Record the working names in PROGRESS.md.
 
-## Check 2 — The classification table (THE check you personally review)
-**Run:** all 4 scenarios through the full pipeline. Print this table:
-
-```
-scenario         | anomaly_type        | confidence | hypothesis (first line)
------------------|---------------------|-----------|------------------------
-payment_failure  | service_failure     | 0.8x      | Payment service is rejecting charge requests...
-queue_backlog    | message_loss        | 0.7x      | Kafka consumer lag is growing, messages delayed...
-payment_outage   | broken_trace        | 0.7x      | checkout→payment call never completes...
-overload         | resource_exhaustion | 0.6x      | Ad/frontend latency rising under load...
-```
-
-**Expect (directional, not exact):**
-| scenario | anomaly_type should be | confidence |
-|---|---|---|
-| payment_failure | `service_failure` | > 0.6 |
-| queue_backlog | `message_loss` | > 0.5 |
-| payment_outage | `broken_trace` or `timeout` | > 0.5 |
-| overload | `resource_exhaustion` or `timeout` | > 0.5 |
-
-And the hypothesis text must clearly reference the actual injected problem (mentions payment / kafka-queue / broken-call / overload). Confidence exact value doesn't matter — direction does.
+## Check 2 — Right-sizing question (THE new core capability)
+**Ask:** "is payment over-provisioned?" on a normal system.
+**Expect:** an answer that quotes real CPU/mem numbers vs the limit and gives a verdict — e.g. "payment averages 12% CPU, 80/300MiB memory → over-provisioned, could lower limits". `findings` has a `resource`/`capacity` category entry; `recommendations` has a concrete right-sizing action with risk_level.
 **If it's wrong:**
-- Wrong anomaly_type → usually the signal from Phase 2 was wrong or wasn't passed in. Check what signals the RCA actually received (log the AgentState going in). The RCA prompt says trust signals first — so a wrong signal = wrong answer. Fix upstream, not the prompt.
-- Right type but confidence always 0.99 or always 0.3 → prompt calibration; tune the confidence guidance, but this is low priority for a demo.
-- Hypothesis generic/hand-wavy → not enough evidence reaching the agent; check the pre-filter is passing real log snippets + metrics.
+- Made-up numbers not matching Prometheus → context_builder didn't fetch resource metrics for that service, so the LLM invented them. Fix the builder to include `get_resource_summary`/`get_memory_usage` for the named service. (The LLM inventing numbers = context problem, not prompt problem.)
+- Vague "seems fine" with no numbers → not enough data reached the agent; check what context was passed in.
 
-## Check 3 — Loop mechanism works and terminates
-**Run:** a test that forces RCA to return `needs_more_data=true` (mock it).
-**Expect:** Orchestrator goes back to `extract` with adjusted fetch, and HARD-STOPS at `loop_count=2` — never infinite. Print loop_count at each pass.
-**If it's wrong:** loops forever → the `loop_count < 2` guard in the conditional edge is missing/wrong. Increments but never re-fetches differently → `missing_data_request` isn't being read by the extractor.
+## Check 3 — Healthy-state honesty
+**Ask:** "how is the system doing?" on a quiet system (no chaos).
+**Expect:** clearly says the system is HEALTHY, backs it with numbers (request rate steady, low error rate, latency normal, resource headroom). Does NOT manufacture a problem.
+**If it's wrong:** invents a fake issue → the prompt's "if healthy, say so" rule isn't landing, or a stale signal from an earlier chaos run leaked into context. Confirm the window is genuinely quiet and no old signals are attached.
 
-## Check 4 — Web search fires on unknown (anthropic mode only)
-**Run:** force an `anomaly_type: unknown` case through Fix agent.
-**Expect:** the web search tool is actually called, and `references` in the output contains real URLs.
-**If it's wrong:** no references / no search → the web_search tool isn't attached, or the multi-block response loop isn't handled (model asks to search but you never feed the result back). In `ollama` mode this is EXPECTED to be skipped — a warning log, empty references, that's fine.
+## Check 4 — Resource alert → upgrade recommendation (the demo money shot)
+**Run:** `adHighCpu` (overload) scenario, let it run, then trigger the analyst on that window (via alert path).
+**Expect:** `cpu_high` signal fired; analyst explains ad/target service is CPU-saturated (real % near limit), recommends scaling up (raise CPU limit) or out (add replica), references the actual utilization and request rate.
+**If it's wrong:**
+- No `cpu_high` signal → resource threshold not added to detector config, or CPU metric not read. See Check 1.
+- Explains it as an error not a resource issue → the resource signal/metrics weren't in context; the analyst defaulted to log-based reasoning.
 
-## Check 5 — Cost counter
-**Expect:** after each pipeline run, a printed line like `LLM calls: 3 | input tokens: 4200 | output tokens: 610`.
-**If it's wrong:** counter not incremented in the llm.py wrapper.
+## Check 5 — Trace question still works
+**Ask:** "anything wrong with trace <real id from a chaos run>?"
+**Expect:** analyst reads the span tree + logs and explains what happened on that trace. (This is the original capability — must still work.)
+**If it's wrong:** can't find trace → trace_id regex/parse failed; test on the actual question string.
 
-## Check 6 — Ollama mode doesn't crash
-**Run:** `LLM_PROVIDER=ollama` full pipeline once.
-**Expect:** completes end-to-end, valid schema out (quality may be worse, classification may be wrong — that's OK). No crash, no code change needed to switch providers.
-**If it's wrong:** crash on switch → provider abstraction leaks (agent hardcodes an anthropic-only call somewhere).
+## Check 6 — Schema validity + provider swap
+**Expect:** every run returns a valid AnalystAnswer, `answer` is readable prose (not raw JSON dumped into the field). `LLM_PROVIDER=ollama` completes without crashing (quality lower, may miss nuance, no web search — all acceptable).
+**If it's wrong:** parse errors → 1-retry-on-validation not wired, or (anthropic) use tool-use structured output instead of parsing free text.
+
+## Check 7 — Web search + cost counter
+**Expect:** for a question benefiting from best practices (e.g. "how should I fix recurring Kafka consumer lag?"), web search fires (anthropic) and references appear. After each run a line prints: `LLM calls: N | in: X tok | out: Y tok`.
 
 ---
 ### Phase 3 is DONE when
-Checks 1,3,4,5,6 pass mechanically, and Check 2's table looks directionally right to YOU across all 4 scenarios (3/4 correct is acceptable for a demo — note the weak one). Remember: don't chase perfect LLM answers by over-editing prompts. If the signal is right and the hypothesis names the real problem, ship it.
+Checks 1, 5, 6, 7 pass mechanically, and Checks 2, 3, 4 read as genuinely useful, grounded answers to YOU across a couple of tries. The bar: would an on-call engineer trust this answer? The single most important thing to get right is Check 2's grounding — the analyst must quote REAL numbers, never invent them. If it invents numbers, fix the context builder (feed it the data), not the prompt.
