@@ -1,0 +1,12 @@
+# Overrides otel-demo/src/grafana/provisioning/datasources/opensearch.yaml
+# Same datasource uid (webstore-logs) so existing Tempo trace-to-logs links keep working.
+
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    uid: webstore-logs
+    type: loki
+    url: http://loki:3100
+    editable: true
+    isDefault: false

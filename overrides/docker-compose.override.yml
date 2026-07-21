@@ -1,0 +1,38 @@
+services:
+  tempo:
+    image: grafana/tempo:2.8.2
+    container_name: tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ../overrides/tempo/tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3200:3200"
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.7.3
+    container_name: loki
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - ../overrides/loki/loki.yaml:/etc/loki/loki.yaml
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  # OpenSearch replaced by Loki for logs; no longer needed.
+  opensearch:
+    profiles: ["disabled"]
+
+  otel-collector:
+    depends_on: !reset
+      tempo:
+        condition: service_started
+      loki:
+        condition: service_started
+
+  grafana:
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../overrides/grafana/tempo-datasource.yaml:/etc/grafana/provisioning/datasources/jaeger.yaml
+      - ../overrides/grafana/loki-datasource.yaml:/etc/grafana/provisioning/datasources/opensearch.yaml

@@ -1,0 +1,20 @@
+# Overrides otel-demo/src/grafana/provisioning/datasources/jaeger.yaml
+# Same datasource uid (webstore-traces) so existing Prometheus exemplar links keep working.
+
+apiVersion: 1
+
+datasources:
+  - name: Tempo
+    uid: webstore-traces
+    type: tempo
+    url: http://tempo:3200
+    editable: true
+    isDefault: false
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: webstore-logs
+        spanStartTimeShift: "-20m"
+        spanEndTimeShift: "20m"
+        filterByTraceID: true
+        tags:
+          - key: trace_id

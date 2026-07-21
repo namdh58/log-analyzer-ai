@@ -3,20 +3,38 @@
 ## Status
 | Phase | Status | Notes |
 |---|---|---|
-| 1 Infrastructure | not started | |
+| 1 Infrastructure | done | otel-demo pinned to release tag `2.2.0` (commit `b74a7bc7`) |
 | 2 Retrieval + Detection | not started | |
 | 3 Agents | not started | |
 | 4 Dashboard | not started | |
 | 5 Integration + Demo | not started | |
 
 ## Decisions log (anything that deviates from the PHASE files or CLAUDE.md)
-- (date) example: "Dropped X because Y, replaced with Z"
+- 2026-07-21: Pinned `otel-demo` to release tag `2.2.0` (was cloned on `main`, 510 commits ahead) for a stable, documented config schema.
+- 2026-07-21: `otel-demo/.env` `DEMO_VERSION` changed from `latest` to `2.2.0`. `latest` pulls bleeding-edge prebuilt images from GHCR that didn't match our pinned `2.2.0` source — `frontend-proxy`'s baked-in envoy template referenced clusters/env vars (`opamp`, `telemetry-docs`, `chatbot`) that don't exist in the base compose file, causing an Envoy config-validation crash loop.
+- 2026-07-21: `otel-demo/src/otel-collector/otelcol-config.yml` `memory_limiter` switched from `limit_percentage`/`spike_limit_percentage` to fixed `limit_mib: 160`/`spike_limit_mib: 40`. Under WSL2, the collector can't parse `/hostfs/proc/mounts` (9p-mounted, unusual format) to compute total host memory, so percentage-based limits fail to start the process at all. This edit is inside the "collector config it mounts" exception in CLAUDE.md.
+- 2026-07-21: Mid-session, Docker Desktop's WSL VM disk failed for real (dmesg: `sd 0:0:0:4: Device offlined`, I/O errors on `sdg`, `docker` CLI itself started segfaulting host-wide). Not a config issue — required the user to restart Docker Desktop, then `docker system prune -a --volumes -f` (27GB reclaimed) to clear silently-corrupted image layers that a plain re-pull wouldn't re-fetch (content-addressable store trusts existing blobs by digest, doesn't re-verify bytes). Full re-pull + `up -d` after that was clean. If containers crash-loop with bizarre errors (corrupted JARs, `ImportError` in stdlib-adjacent packages, instant segfaults) on this host again, suspect cache corruption before debugging application config.
+- 2026-07-21: Tempo pinned to `grafana/tempo:2.8.2`, not `latest`. Tempo 3.0 (what `latest` resolves to) restructured its config schema — top-level `ingester`/`compactor` keys from the standard single-binary config no longer parse. Loki pinned to `grafana/loki:3.7.3` (resolved version of `latest`, which does work) — CLAUDE.md requires v3.x for native OTLP ingestion.
+- 2026-07-21: **Compose invocation for this whole project is always**: `docker compose -f otel-demo/docker-compose.yml -f overrides/docker-compose.override.yml <cmd>`, run from the repo root. Relative paths inside `overrides/docker-compose.override.yml` must be written relative to `otel-demo/` (e.g. `../overrides/tempo/tempo.yaml`), NOT relative to `overrides/` itself or the repo root — Compose resolves relative paths against the directory of the *first* `-f` file, regardless of where each file physically lives. Verified empirically via `docker compose ... config`.
+- 2026-07-21: `opensearch` disabled via `profiles: ["disabled"]` on the service in the override, combined with resetting `otel-collector`'s `depends_on` using the YAML `!reset` tag (`depends_on: !reset {tempo: ..., loki: ...}`). Compose merges `depends_on` maps additively across `-f` files — there's no way to *remove* a base-file key like `opensearch`'s dependency except `!reset`, which replaces the whole map instead of merging it.
+- 2026-07-21: `jaeger` container is intentionally left running (untouched, not profiled off) — `frontend-proxy`'s `/jaeger/` UI route and its own `depends_on: jaeger` would otherwise force it to start anyway. It just no longer receives any trace data since the collector's traces exporter now points at Tempo only. Harmless, low-cost to leave as-is.
+- 2026-07-21: Grafana's Tempo and Loki datasources are provisioned via two single-file volume-mount overrides that land on the exact same container paths as the original `jaeger.yaml`/`opensearch.yaml` provisioning files (`overrides/grafana/tempo-datasource.yaml` → `.../datasources/jaeger.yaml`, `overrides/grafana/loki-datasource.yaml` → `.../datasources/opensearch.yaml`), and **reuse the same datasource `uid`s** (`webstore-traces`, `webstore-logs`). This means `default.yaml`'s Prometheus exemplar-to-trace links keep working with zero edits to that file. Confirmed multiple bind mounts can target nested paths inside an already-mounted directory without conflict.
+- 2026-07-21: `payment_failure` and `payment_outage` scenarios do **not** set OTel span status to `ERROR` — spans stay `STATUS_CODE_UNSET` even on a confirmed HTTP 500 from `/api/checkout`. Phase 2 detection should use HTTP status codes (or another app-level signal), not `traces_span_metrics_calls_total{status_code=...}`, to catch these two scenarios.
+- 2026-07-21: `queue_backlog` (`kafkaQueueProblems`) does **not** show up as Kafka consumer lag in this environment — `fraud-detection` consumes fast enough that `kafka_consumer_records_lag` stayed at 0 through a full 120s run. The real, confirmed effect is a message-volume flood (`kafka_message_count_total` jumped ~35x over baseline) plus duplicate-key DB errors in the `accounting` service logs (same `orderId` consumed 300+ times). Phase 2 should detect this scenario via message rate / duplicate processing, not lag.
 
 ## Known issues / TODO next session
--
+- None blocking. Ready to start Phase 2 using the verified facts below.
+- Minor, non-blocking: load-generator's Playwright-based `WebsiteBrowserUser` tasks (`add_product_to_cart`, `open_cart_page_and_change_currency`) fail with `AttributeError: 'WebsiteBrowserUser' object has no attribute 'tracer'` — a load-gen instrumentation bug in this demo version, unrelated to our stack. The plain HTTP API load (product browsing, cart, checkout) all works and is what's generating real traffic/traces/logs.
 
 ## Verified facts (fill in during Phase 1 — later phases rely on these)
-- Exact flagd flag names used: (read from demo.flagd.json)
-- Loki label names for service/severity: 
-- Tempo API endpoint + query format that works: 
-- Prometheus metric names for latency/error-rate/kafka-lag: 
+- **flagd flags** (full list captured in `tests/fixtures/flagd_flags.json`, read from `otel-demo/src/flagd/demo.flagd.json`): names in CLAUDE.md's scenario table are all correct as written — `paymentFailure` (variants incl. `100%`), `paymentUnreachable` (`on`/`off`), `kafkaQueueProblems` (`on`/`off`), `adHighCpu` (`on`/`off`). All 4 verified live via `chaos/scenarios.py` with real, observed effects (HTTP 500s, 374% CPU on `ad`, message flood on Kafka).
+- **Loki labels**: `service_name` (service), `severity_text` / `detected_level` (severity), `trace_id` (structured metadata, promoted to an indexed label — this is what makes trace↔log correlation queryable: `{service_name=~".+"} | trace_id="<id>"`).
+- **Tempo API** (host: `http://localhost:3200`, internal: `http://tempo:3200`):
+  - Full trace: `GET /api/traces/{traceID}`
+  - Search: `GET /api/search?tags=service.name%3D<name>&start=<unix>&end=<unix>&limit=<n>`
+- **Prometheus metric names** (host: `http://localhost:9090`):
+  - Latency: `traces_span_metrics_duration_milliseconds_bucket{service_name, span_name, span_kind}` (from the `spanmetrics` connector, histogram)
+  - Call count / status: `traces_span_metrics_calls_total{service_name, span_name, status_code}` — `status_code` is `STATUS_CODE_OK|ERROR|UNSET` but see the caveat above: not all failure scenarios set it to `ERROR`
+  - HTTP server metrics exist for some services as `http_server_request_duration_seconds_*` but not `checkout`/`frontend` in this version — don't assume it's universal, check per-service
+  - Kafka: `kafka_consumer_records_lag` / `kafka_consumer_records_lag_max` / `kafka_lag_max` (lag), `kafka_message_count_total` (volume — more reliable signal for `queue_backlog`)
+- **Grafana**: reachable at `http://localhost:8080/grafana/` (via frontend-proxy) or its own random host port (`docker compose ps grafana`); admin/admin. Datasource uids: `webstore-metrics` (Prometheus), `webstore-traces` (Tempo), `webstore-logs` (Loki) — all three pass `/api/datasources/{id}/health`.

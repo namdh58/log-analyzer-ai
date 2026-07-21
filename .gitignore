@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+chaos/injected_events.log
