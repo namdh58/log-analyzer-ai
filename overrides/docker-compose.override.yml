@@ -36,3 +36,5 @@ services:
     volumes:
       - ../overrides/grafana/tempo-datasource.yaml:/etc/grafana/provisioning/datasources/jaeger.yaml
       - ../overrides/grafana/loki-datasource.yaml:/etc/grafana/provisioning/datasources/opensearch.yaml
+      - ../overrides/grafana/ai-copilot-dashboards.yaml:/etc/grafana/provisioning/dashboards/ai-copilot.yaml
+      - ../overrides/grafana/dashboards:/etc/grafana/provisioning/dashboards/ai-copilot

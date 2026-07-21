@@ -1,0 +1,84 @@
+{
+  "uid": "ai-copilot-overview",
+  "title": "AI Copilot",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "CPU % per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "container_cpu_utilization_ratio",
+          "legendFormat": "{{container_name}}",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
+    },
+    {
+      "id": 2,
+      "title": "Memory % per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "container_memory_percent_ratio",
+          "legendFormat": "{{container_name}}",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percent" }, "overrides": [] }
+    },
+    {
+      "id": 3,
+      "title": "p95 latency per service (ms)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(traces_span_metrics_duration_milliseconds_bucket[2m])) by (le, service_name))",
+          "legendFormat": "{{service_name}}",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "id": 4,
+      "title": "Error rate per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(traces_span_metrics_calls_total{status_code=\"STATUS_CODE_ERROR\"}[2m])) by (service_name) / sum(rate(traces_span_metrics_calls_total[2m])) by (service_name)",
+          "legendFormat": "{{service_name}}",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }
+    },
+    {
+      "id": 5,
+      "title": "Recent AI analyses",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "webstore-logs" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "{service_name=\"ai-copilot\"}",
+          "datasource": { "type": "loki", "uid": "webstore-logs" }
+        }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    }
+  ]
+}
