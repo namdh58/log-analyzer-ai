@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AI Copilot — Observability Assistant</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --border: #2a2f3d; --text: #e6e8ee;
+    --muted: #8b90a0; --accent: #5b8cff; --crit: #ff5c6c; --warn: #ffb454; --info: #5b8cff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 18px 24px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0; font-size: 20px; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+  .panel h2 { margin: 0 0 12px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  #alert-banner { display: none; background: #3a2130; border: 1px solid var(--crit); color: #ffdbe0; padding: 10px 14px; border-radius: 8px; margin-bottom: 16px; cursor: pointer; font-size: 14px; }
+  #alert-banner:hover { background: #47283a; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip { background: #232838; border: 1px solid var(--border); color: var(--text); padding: 6px 12px; border-radius: 16px; font-size: 13px; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+
+  #ask-row { display: flex; gap: 8px; }
+  #question { flex: 1; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0d0f16; color: var(--text); font-size: 14px; }
+  #ask-btn { padding: 10px 18px; border-radius: 8px; border: none; background: var(--accent); color: white; font-weight: 600; cursor: pointer; }
+  #ask-btn:disabled { opacity: .5; cursor: default; }
+
+  #status { color: var(--muted); font-size: 13px; margin-top: 10px; min-height: 18px; }
+
+  #answer-card { margin-top: 16px; display: none; }
+  #answer-text { font-size: 15px; line-height: 1.5; margin-bottom: 14px; }
+
+  .finding, .rec { border-left: 3px solid var(--info); background: #12141c; padding: 8px 12px; border-radius: 0 6px 6px 0; margin-bottom: 8px; font-size: 13px; }
+  .finding.critical, .rec.high { border-left-color: var(--crit); }
+  .finding.warning, .rec.medium { border-left-color: var(--warn); }
+  .finding.info, .rec.low { border-left-color: var(--info); }
+  .finding .tag, .rec .tag { display: inline-block; font-size: 11px; text-transform: uppercase; color: var(--muted); margin-bottom: 3px; }
+  .rec .refs a { color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; }
+
+  .hist-item { padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .hist-item .q { color: var(--muted); font-size: 11px; }
+  .hist-item .t { color: var(--muted); font-size: 11px; float: right; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Observability AI Copilot</h1>
+  <p>Ask about failures, right-sizing, capacity, or overall health of the Astronomy Shop cluster.</p>
+</header>
+
+<main>
+  <div>
+    <div id="alert-banner"></div>
+
+    <div class="panel">
+      <h2>Ask the copilot</h2>
+      <div class="chips">
+        <span class="chip" data-q="How is the system doing right now?">How is the system doing right now?</span>
+        <span class="chip" data-q="Is payment over-provisioned?">Is payment over-provisioned?</span>
+        <span class="chip" data-q="Which service will saturate first if traffic triples?">Which service will saturate first if traffic triples?</span>
+        <span class="chip" data-q="What's wrong with the ad service?">What's wrong with the ad service?</span>
+      </div>
+      <div id="ask-row">
+        <input id="question" type="text" placeholder="Ask a question about the cluster...">
+        <button id="ask-btn">Ask</button>
+      </div>
+      <div id="status"></div>
+
+      <div id="answer-card">
+        <div id="answer-text"></div>
+        <div id="findings"></div>
+        <div id="recommendations"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Recent analyses</h2>
+      <div id="history"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>Live resource utilization</h2>
+      <table id="resource-table">
+        <thead><tr><th>Service</th><th>CPU avg/peak</th><th>Mem avg/peak</th><th>Req/s</th><th>p95 ms</th><th>Err%</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = sel => document.querySelector(sel);
+const fmt = (v, d=1, suffix='') => (v === null || v === undefined) ? '—' : v.toFixed(d) + suffix;
+
+async function ask(question) {
+  $('#question').value = question;
+  $('#ask-btn').disabled = true;
+  $('#status').textContent = 'Analyzing… (can take up to 60s)';
+  $('#answer-card').style.display = 'none';
+  try {
+    const res = await fetch('/ask', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({question})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const answer = await res.json();
+    renderAnswer(answer);
+    $('#status').textContent = '';
+    loadHistory();
+  } catch (e) {
+    $('#status').textContent = 'Error: ' + e.message;
+  } finally {
+    $('#ask-btn').disabled = false;
+  }
+}
+
+function renderAnswer(a) {
+  $('#answer-text').textContent = a.answer;
+  $('#findings').innerHTML = a.findings.map(f => `
+    <div class="finding ${f.severity}">
+      <div class="tag">${f.category}${f.service ? ' · ' + f.service : ''} · ${f.severity}</div>
+      ${f.summary}
+    </div>`).join('');
+  $('#recommendations').innerHTML = a.recommendations.map(r => `
+    <div class="rec ${r.risk_level}">
+      <div class="tag">recommendation · ${r.risk_level} risk</div>
+      ${r.action}<br><span style="color:var(--muted)">${r.rationale}</span>
+      ${r.references.length ? `<div class="refs">${r.references.map(u => `<a href="${u}" target="_blank">${u}</a>`).join(' · ')}</div>` : ''}
+    </div>`).join('');
+  $('#answer-card').style.display = 'block';
+}
+
+document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => ask(c.dataset.q)));
+$('#ask-btn').addEventListener('click', () => { const q = $('#question').value.trim(); if (q) ask(q); });
+$('#question').addEventListener('keydown', e => { if (e.key === 'Enter') $('#ask-btn').click(); });
+
+async function loadHistory() {
+  const rows = await (await fetch('/history')).json();
+  $('#history').innerHTML = rows.map(r => `
+    <div class="hist-item">
+      <span class="t">${new Date(r.timestamp * 1000).toLocaleTimeString()}</span>
+      ${r.answer.slice(0, 140)}${r.answer.length > 140 ? '…' : ''}
+      <div class="q">${r.question || r.trigger_type}</div>
+    </div>`).join('') || '<span style="color:var(--muted)">No analyses yet.</span>';
+}
+
+async function loadResources() {
+  const rows = await (await fetch('/resource-summary')).json();
+  $('#resource-table tbody').innerHTML = rows.map(r => `
+    <tr>
+      <td>${r.service}</td>
+      <td>${fmt(r.cpu.avg_pct)} / ${fmt(r.cpu.peak_pct)}%</td>
+      <td>${fmt(r.memory.avg_pct)} / ${fmt(r.memory.peak_pct)}%</td>
+      <td>${fmt(r.request_rate, 2)}</td>
+      <td>${fmt(r.p95_latency_ms, 0)}</td>
+      <td>${fmt(r.error_rate ? r.error_rate * 100 : r.error_rate)}</td>
+    </tr>`).join('');
+}
+
+let bannerAlert = null;
+async function loadAlerts() {
+  const alerts = await (await fetch('/alerts')).json();
+  const banner = $('#alert-banner');
+  if (alerts.length === 0) { banner.style.display = 'none'; bannerAlert = null; return; }
+  bannerAlert = alerts[0];
+  banner.textContent = `⚠ ${bannerAlert.message} — click to analyze`;
+  banner.style.display = 'block';
+}
+$('#alert-banner').addEventListener('click', () => { if (bannerAlert) ask(bannerAlert.question); });
+
+loadHistory();
+loadResources();
+loadAlerts();
+setInterval(loadResources, 10000);
+setInterval(loadAlerts, 15000);
+</script>
+</body>
+</html>
