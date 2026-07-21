@@ -24,8 +24,9 @@ Must actually run end-to-end (no full mocks). Not production. All user-facing te
 | Logs | OTel Collector → **Loki** via native OTLP ingestion (replaces demo's OpenSearch) |
 | Dashboards | Grafana (ships with demo; add Tempo+Loki datasources) |
 | Agent orchestration | LangGraph |
-| LLM | Pluggable via `LLM_PROVIDER`: `anthropic` (default) or `ollama` (local) |
+| LLM | Pluggable via `LLM_PROVIDER`: `anthropic` (default) · `openrouter` (session addition) · `ollama` (local) |
 | Anthropic models | fast (light tasks): `claude-haiku-4-5` · smart (analysis): `claude-sonnet-4-6` |
+| OpenRouter fallback | `deepseek/deepseek-chat` via https://openrouter.ai — used when no `ANTHROPIC_API_KEY` is available yet. Same tier for fast/smart. No web search in this mode. |
 | Ollama fallback | `qwen2.5:7b-instruct` (fits RTX 3080 8GB, JSON mode). No web search in this mode. |
 | PII masking | Regex-based (skip Presidio — too heavy for demo) |
 
@@ -49,8 +50,10 @@ observability-ai-copilot/
 
 ## Env vars (.env — always keep .env.example in sync)
 ```
-LLM_PROVIDER=anthropic          # anthropic | ollama
+LLM_PROVIDER=anthropic          # anthropic | openrouter | ollama
 ANTHROPIC_API_KEY=
+OPENROUTER_API_KEY=             # openrouter provider (deepseek/deepseek-chat), no web search
+OPENROUTER_MODEL=deepseek/deepseek-chat
 OLLAMA_URL=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b-instruct
 LOKI_URL=http://localhost:3100
