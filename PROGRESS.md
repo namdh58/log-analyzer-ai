@@ -6,7 +6,7 @@
 | 1 Infrastructure | done | otel-demo pinned to release tag `2.2.0` (commit `b74a7bc7`) |
 | 2 Retrieval + Detection | done | all 6 acceptance checks green; see decisions log for 4 real bugs found via live testing |
 | 3 Agents | mostly done | Checks 1-6 verified live (deepseek, routed via OpenRouter); Check 7's web-search half needs a real `ANTHROPIC_API_KEY`; cost counter half already verified. Post-Phase-3 enhancement (multi-provider LLM + client-side tavily search) also verified live for deepseek+none and deepseek+tavily. See Phase 3 verification notes. |
-| 4 Dashboard | done (Teams stretch skipped) | 4.1 chat app, 4.2 Grafana panels, in-app alert banner (4.3) all verified live. Teams webhook not sent — `TEAMS_WEBHOOK_URL` is empty in `.env` and it's explicitly optional/do-last in PHASE4.md. Post-Phase-4 enhancement: bounded 4-turn multi-turn conversation + conversation UI + embedded Grafana panels, verified live end-to-end. See Phase 4 multi-turn verification notes. |
+| 4 Dashboard | done (Teams stretch skipped) | 4.1 chat app, 4.2 Grafana panels, in-app alert banner (4.3) all verified live. Teams webhook not sent — `TEAMS_WEBHOOK_URL` is empty in `.env` and it's explicitly optional/do-last in PHASE4.md. Post-Phase-4 enhancement: bounded 4-turn multi-turn conversation + conversation UI + embedded Grafana panels — verified live end-to-end **including in a real headless browser** (`tests/verify_ui.py`, 5/5 steps pass, screenshots eyeballed), closing the "no browser available" gap noted in the two prior sessions. See Phase 4 multi-turn verification notes. |
 | 5 Integration + Demo | not started | |
 
 ## Decisions log (anything that deviates from the PHASE files or CLAUDE.md)
