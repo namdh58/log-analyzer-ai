@@ -77,6 +77,19 @@ def test_comparison_question_pulls_fresh_metrics_for_both_named_services():
     assert "- checkout:" in rendered
 
 
+def test_checkout_question_also_pulls_frontend_proxy_and_payment_logs():
+    # payment_failure/payment_outage never show as an error on checkout's own logs -- the
+    # HTTP 5xx is only visible in frontend-proxy's access log (verified fact, PROGRESS.md),
+    # and the actual reason is only in payment's own logs (charge.js throws it). A checkout
+    # question must include both or the analyst either misses or can't explain the failure.
+    state = AgentState(trigger_type="user_question", question="what's wrong with checkout right now?")
+    context = build_context(state)
+    assert context["mode"] == "service"
+    services_in_logs = {entry["service"] for entry in context["logs"]}
+    assert "frontend-proxy" in services_in_logs
+    assert "payment" in services_in_logs
+
+
 def test_find_named_services_orders_by_question_position_not_list_order():
     # checkout sits before payment in RESOURCE_SERVICES, but the question says payment first.
     assert _find_named_services("compare payment and checkout") == ["payment", "checkout"]

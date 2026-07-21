@@ -13,6 +13,13 @@ from retrieval.trace_client import TraceClient
 _BASE_GENERAL_WINDOW_S = 900  # 15 min, per PHASE3.md 3.5 default for a general question
 _BASE_SERVICE_WINDOW_S = 1800  # 30 min, per PHASE3.md 3.3 default for a named-service question
 _MAX_LOG_LINES = 40
+# payment_failure/payment_outage never surface as an error on checkout's own span/logs --
+# frontend-proxy's access log is the only place the HTTP 5xx is even VISIBLE (verified
+# fact, see PROGRESS.md), but it only shows a bare status code, not why. The actual reason
+# ("Payment request failed. Invalid token...", otel-demo/src/payment/charge.js) is only in
+# payment's own logs. A "what's wrong with checkout" question needs both or the analyst
+# either misses the failure entirely or can only guess at a generic cause.
+_EXTRA_LOG_SERVICES = {"checkout": ["frontend-proxy", "payment"], "payment": ["frontend-proxy"]}
 
 _metrics = MetricClient()
 _traces = TraceClient()
@@ -47,6 +54,17 @@ def _flatten(node):
     yield node
     for child in node.children:
         yield from _flatten(child)
+
+
+def _service_logs(services: list[str], start: float, end: float) -> list:
+    """Cap each service's contribution independently before concatenating -- otherwise
+    _render_logs's global tail-slice lets whichever service is queried last crowd out
+    every earlier one once the combined total exceeds _MAX_LOG_LINES."""
+    extra = {svc for named in services for svc in _EXTRA_LOG_SERVICES.get(named, [])}
+    logs = []
+    for svc in [*services, *sorted(extra)]:
+        logs += _logs.get_logs_by_time_range(start, end, service=svc)[-_MAX_LOG_LINES:]
+    return logs
 
 
 def _service_metrics(service: str, start: float, end: float) -> dict:
@@ -90,20 +108,17 @@ def build_context(state) -> dict:
         context["mode"] = "services"
         context["services"] = named_services
         context["metrics_by_service"] = {svc: _service_metrics(svc, start, end) for svc in named_services}
-        logs = []
-        for svc in named_services:
-            logs += _logs.get_logs_by_time_range(start, end, service=svc)
-        context["logs"] = _render_logs(logs)
+        context["logs"] = _render_logs(_service_logs(named_services, start, end))
     elif named_services:
         context["mode"] = "service"
         context["service"] = named_services[0]
         context["metrics"] = _service_metrics(named_services[0], start, end)
-        context["logs"] = _render_logs(_logs.get_logs_by_time_range(start, end, service=named_services[0]))
+        context["logs"] = _render_logs(_service_logs(named_services, start, end))
     else:
         context["mode"] = "general"
         context["resource_summary"] = _metrics.get_resource_summary(start, end)
         context["logs"] = _render_logs(
-            _logs.get_logs_by_time_range(start, end, levels=["error", "warn"])
+            _logs.get_logs_by_time_range(start, end, levels=["error", "warn"])[-_MAX_LOG_LINES:]
         )
 
     context["window"] = {"start": start, "end": end}
@@ -133,7 +148,9 @@ def _trace_context(trace_id: str) -> dict:
 
 
 def _render_logs(entries) -> list[dict]:
-    return [{"service": e.service, "level": e.level, "message": e.message} for e in entries][-_MAX_LOG_LINES:]
+    # Callers are responsible for their own cap -- per-service where multiple sources are
+    # concatenated (_service_logs), inline where there's a single query.
+    return [{"service": e.service, "level": e.level, "message": e.message} for e in entries]
 
 
 def _pct(v) -> str:
