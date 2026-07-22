@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AI Log Analysis Assistant — Technical Architecture Review</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<div class="progress-bar" id="progress"></div>
+<button class="nav-btn prev" id="btn-prev" aria-label="Previous slide">‹</button>
+<button class="nav-btn next" id="btn-next" aria-label="Next slide">›</button>
+
+<div class="viewport">
+  <div class="deck">
+
+    <!-- 1. TITLE -->
+    <section class="slide active title-slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="eyebrow">Technical Architecture Review</div>
+      <h1>AI Log Analysis Assistant</h1>
+      <p class="sub">
+        How an infrastructure-analyst agent turns raw logs, traces, and metrics from a live
+        distributed system into a grounded root-cause answer — internal design walkthrough,
+        not a product demo.
+      </p>
+      <div class="title-hint">
+        <kbd>→</kbd> / <kbd>space</kbd> next &nbsp;·&nbsp; <kbd>←</kbd> previous
+        &nbsp;·&nbsp; <kbd>Home</kbd> / <kbd>End</kbd> jump &nbsp;·&nbsp; click deck edges to navigate
+      </div>
+    </section>
+
+    <!-- 2. AGENDA -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">Agenda</div>
+      <h2>What this review covers</h2>
+      <p class="sub">Sixteen focused slides, one idea each — architecture first, product second.</p>
+      <div class="slide-body">
+        <ul class="agenda">
+          <li><span class="idx">03</span> System architecture (layered)</li>
+          <li><span class="idx">04</span> Component / tech map</li>
+          <li><span class="idx">05</span> AI reasoning flow (core)</li>
+          <li><span class="idx">06</span> Log processing pipeline</li>
+          <li><span class="idx">07</span> Evidence collection &amp; context</li>
+          <li><span class="idx">08</span> Retrieval strategy vs. vector RAG</li>
+          <li><span class="idx">09</span> Agent orchestration (LangGraph)</li>
+          <li><span class="idx">10</span> Deterministic detection layer</li>
+          <li><span class="idx">11</span> How a signal detector works</li>
+          <li><span class="idx">12</span> Evidence → root cause</li>
+          <li><span class="idx">13</span> Recommendation generation</li>
+          <li><span class="idx">14</span> Request sequence, end to end</li>
+          <li><span class="idx">15</span> Chaos engineering validation</li>
+          <li><span class="idx">16</span> Expected AI output</li>
+          <li><span class="idx">17</span> Grounding safeguards</li>
+          <li><span class="idx">18</span> Takeaways</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- 3. SYSTEM ARCHITECTURE -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">03 · System architecture</div>
+      <h2>Five layers: measure cheaply, reason expensively</h2>
+      <p class="sub">The LLM sits at the top of the stack, not underneath every step — everything below it is plain, deterministic Python.</p>
+      <div class="slide-body">
+        <div class="stack">
+          <div class="layer">
+            <div class="layer-title">Telemetry sources &amp; collection</div>
+            <div class="layer-boxes">
+              <div class="layer-box">OTel auto-instrumented services</div>
+              <div class="layer-box">OTel Collector</div>
+              <div class="layer-box">Tempo · traces</div>
+              <div class="layer-box">Loki · logs (native OTLP)</div>
+              <div class="layer-box">Prometheus · metrics</div>
+            </div>
+          </div>
+          <div class="layer-connector">↓</div>
+          <div class="layer">
+            <div class="layer-title">Retrieval clients (Python, no LLM)</div>
+            <div class="layer-boxes">
+              <div class="layer-box">log_client.py</div>
+              <div class="layer-box">metric_client.py</div>
+              <div class="layer-box">trace_client.py</div>
+              <div class="layer-box">PII masking (regex)</div>
+            </div>
+          </div>
+          <div class="layer-connector">↓</div>
+          <div class="layer trusted">
+            <div class="layer-title">Deterministic detection — zero LLM cost</div>
+            <div class="layer-boxes">
+              <div class="layer-box">8 signal detectors (baseline + threshold)</div>
+            </div>
+          </div>
+          <div class="layer-connector">↓ measured, trusted signals ↓</div>
+          <div class="layer reasoning">
+            <div class="layer-title">AI reasoning — LangGraph + LLM</div>
+            <div class="layer-boxes">
+              <div class="layer-box">build_context()</div>
+              <div class="layer-box">analyze()</div>
+              <div class="layer-box">route() self-check</div>
+            </div>
+          </div>
+          <div class="layer-connector">↓</div>
+          <div class="layer">
+            <div class="layer-title">Interfaces</div>
+            <div class="layer-boxes">
+              <div class="layer-box">Dashboard chat API</div>
+              <div class="layer-box">Grafana panels</div>
+              <div class="layer-box">Scheduled scanner</div>
+              <div class="layer-box">Chaos control panel</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. COMPONENT MAP -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">04 · Component map</div>
+      <h2>What each piece is actually responsible for</h2>
+      <p class="sub">Standard observability backends underneath; the copilot logic is a thin, swappable layer on top.</p>
+      <div class="slide-body">
+        <div class="grid grid-4">
+          <div class="card"><span class="pill outline-cyan">traces</span><h3>Tempo</h3><p>Full span trees per trace_id. Root cause of a broken flow, not just "this trace errored."</p></div>
+          <div class="card"><span class="pill outline-cyan">logs</span><h3>Loki</h3><p>Native OTLP ingestion. Queried by service, time range, or trace_id — the only place some failures are visible.</p></div>
+          <div class="card"><span class="pill outline-cyan">metrics</span><h3>Prometheus</h3><p>CPU/mem vs. container limits, latency, error &amp; request rate. Backs both the detector and the dashboard panels.</p></div>
+          <div class="card"><span class="pill outline-cyan">viz</span><h3>Grafana</h3><p>Human-facing panels + the embedded per-service view inside the copilot's own dashboard.</p></div>
+          <div class="card"><span class="pill blue">orchestration</span><h3>LangGraph</h3><p>The state graph running build_context → analyze → route on every question.</p></div>
+          <div class="card"><span class="pill blue">reasoning</span><h3>Pluggable LLM</h3><p>Anthropic / DeepSeek / Ollama behind one <code>complete()</code> contract — swap providers, zero changes to agent logic.</p></div>
+          <div class="card"><span class="pill amber">injection</span><h3>flagd</h3><p>The demo's own feature-flag service. Failures are triggered with real flags, never custom fault code.</p></div>
+          <div class="card"><span class="pill amber">surface</span><h3>FastAPI</h3><p>Dashboard chat (8500) + a separate chaos control panel (8600) — thin HTTP wrappers over the agent graph.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. AI REASONING FLOW (hero) -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">05 · Core architecture component</div>
+      <h2>The AI reasoning flow</h2>
+      <p class="sub">Every question — user-typed, alert-triggered, or scheduled — runs this exact nine-step chain.</p>
+      <div class="slide-body">
+        <div class="flow">
+          <div class="flow-step"><div class="n">1</div><div class="t">User Question</div><div class="d">POST /ask {question}</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="n">2</div><div class="t">Evidence Collection</div><div class="d">build_context() picks a retrieval mode</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="n">3</div><div class="t">Log Retrieval</div><div class="d">Loki, incl. cross-service extras</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="n">4</div><div class="t">Metric Correlation</div><div class="d">CPU/mem/latency/error vs. baseline</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="n">5</div><div class="t">Knowledge Retrieval</div><div class="d">optional web search for external best practice</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="n">6</div><div class="t">Hypothesis Generation</div><div class="d">LLM drafts Findings w/ quoted evidence</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="n">7</div><div class="t">Root Cause ID</div><div class="d">answer names the cause, grounded only</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="n">8</div><div class="t">Recommendation</div><div class="d">reviewable action + risk_level</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step terminal"><div class="n">9</div><div class="t">Final Answer</div><div class="d">persisted, retried if too thin</div></div>
+        </div>
+      </div>
+      <div class="slide-foot">Steps 2–4 and 6–8 map directly to real functions: see slides 07, 09, 12, 13.</div>
+    </section>
+
+    <!-- 6. LOG PROCESSING PIPELINE -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">06 · Log processing pipeline</div>
+      <h2>From container stdout to a masked, queryable log line</h2>
+      <p class="sub">Ingestion is standard OTel — the only copilot-specific step is masking, applied once, at the exit of the retrieval layer.</p>
+      <div class="slide-body">
+        <div class="stack">
+          <div class="layer">
+            <div class="layer-title">Emit</div>
+            <div class="layer-boxes"><div class="layer-box">Auto-instrumented service containers (structured log + trace context)</div></div>
+          </div>
+          <div class="layer-connector">↓</div>
+          <div class="layer">
+            <div class="layer-title">Collect</div>
+            <div class="layer-boxes"><div class="layer-box">OTel Collector — receives OTLP, fans out</div></div>
+          </div>
+          <div class="layer-connector">↓</div>
+          <div class="layer">
+            <div class="layer-title">Store</div>
+            <div class="layer-boxes">
+              <div class="layer-box">Loki (native OTLP ingestion)</div>
+              <div class="layer-box">Tempo (traces)</div>
+              <div class="layer-box">Prometheus (span/resource metrics)</div>
+            </div>
+          </div>
+          <div class="layer-connector">↓</div>
+          <div class="layer trusted">
+            <div class="layer-title">Mask — before anything leaves retrieval/</div>
+            <div class="layer-boxes"><div class="layer-box">Regex PII masking — all data crossing into agents/ is already masked</div></div>
+          </div>
+          <div class="layer-connector">↓</div>
+          <div class="layer">
+            <div class="layer-title">Query on demand</div>
+            <div class="layer-boxes"><div class="layer-box">log_client.get_logs_by_time_range() / get_logs_by_trace_id()</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. EVIDENCE COLLECTION & CONTEXT CONSTRUCTION -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">07 · Evidence collection &amp; context construction</div>
+      <h2>build_context() decides what evidence a question deserves</h2>
+      <p class="sub">Mode routing, not a fixed query — the shape of the question determines the shape of the fetch.</p>
+      <div class="slide-body">
+        <div class="flow">
+          <div class="flow-step"><div class="t">Question / trace_id / signals</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step decision"><div class="t">Mode router</div><div class="d">trace_id? named service(s)? none?</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step terminal"><div class="t">TRACE</div><div class="d">full span tree + logs by trace_id</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step terminal"><div class="t">SERVICE</div><div class="d">1 service's metrics + logs + extras</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step terminal"><div class="t">SERVICES</div><div class="d">fresh metrics for every named service</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step terminal"><div class="t">GENERAL</div><div class="d">fleet resource summary + error/warn logs</div></div>
+        </div>
+        <div class="card">
+          <h3>🧩 The non-obvious part: <code>_EXTRA_LOG_SERVICES</code></h3>
+          <p>A "what's wrong with checkout?" question also pulls <code>frontend-proxy</code>'s and <code>payment</code>'s logs — because checkout's <em>own</em> telemetry never shows the real failure reason. That mapping was learned by hand from a real investigation, not guessed.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. RETRIEVAL STRATEGY VS VECTOR RAG -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">08 · Retrieval strategy</div>
+      <h2>Structured live retrieval, deliberately not vector RAG</h2>
+      <p class="sub">"RAG" here means retrieval-augmented generation over live typed telemetry — not embeddings over a document corpus. That was a considered rejection, not an omission.</p>
+      <div class="slide-body">
+        <div class="grid grid-2">
+          <div class="compare-col no">
+            <h3>Vector RAG — considered, rejected</h3>
+            <ul>
+              <li>Embed logs/metrics, retrieve by similarity</li>
+              <li>Adds indexing latency and staleness for data that changes every few seconds</li>
+              <li>Relevant evidence is structural (service name, time range) — not semantic</li>
+              <li>Needs an extra vector-DB service to run and keep fresh</li>
+            </ul>
+          </div>
+          <div class="compare-col yes">
+            <h3>What this system does instead</h3>
+            <ul>
+              <li>Typed queries straight against Loki / Prometheus / Tempo, by service + time range</li>
+              <li>Always current — fetched fresh at answer time, never a stale index</li>
+              <li>Deterministic mode-routing decides <em>what</em> to fetch — no relevance scoring needed</li>
+              <li>One fewer service to run, deploy, and keep in sync</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="slide-foot">Design decision, recorded verbatim: "explicitly NOT a vector DB" — see project decision log.</div>
+    </section>
+
+    <!-- 9. AGENT ORCHESTRATION -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">09 · Agent orchestration</div>
+      <h2>One LangGraph state machine, one path for every trigger</h2>
+      <p class="sub">User questions, alerts, and scheduled scans all compile down to the same graph.</p>
+      <div class="slide-body">
+        <div class="flow">
+          <div class="flow-step"><div class="t">build_context()</div><div class="d">assemble evidence</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="t">analyze()</div><div class="d">smart-tier LLM, grounded synthesis</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step decision"><div class="t">route()</div><div class="d">answer &lt;40 chars &amp; no findings?</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step terminal"><div class="t">persist()</div><div class="d">JSONL history + push to Loki</div></div>
+        </div>
+        <div class="card">
+          <h3>↺ Self-correcting retry</h3>
+          <p>If <code>route()</code> judges the answer too thin and <code>loop_count &lt; 2</code>, it loops back to <code>build_context()</code> with the time window widened <code>2ˣ</code> — the agent re-investigates with more data before ever admitting defeat. Hard-capped at 2 retries.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10. DETECTION LAYER -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">10 · Deterministic detection layer</div>
+      <h2>Eight signal checks, pure Python, zero LLM cost</h2>
+      <p class="sub">The AI explains anomalies this layer already measured — it never has to spot one from raw numbers alone.</p>
+      <div class="slide-body">
+        <div class="grid grid-4">
+          <div class="card"><h3>latency_spike</h3><p>p95 vs. rolling baseline, requires ≥2 samples — one noisy bucket can't fire alone.</p></div>
+          <div class="card"><h3>error_rate_spike</h3><p>Absolute floor OR relative-to-baseline jump, whichever fires.</p></div>
+          <div class="card"><h3>checkout_http_error_rate</h3><p>HTTP 5xx fallback — catches failures the span status itself can't show.</p></div>
+          <div class="card"><h3>span_gap</h3><p>Diffs a real trace tree against the expected service map — flags missing children.</p></div>
+          <div class="card"><h3>queue_anomaly</h3><p>Kafka publish-rate vs. baseline — not consumer lag, which stayed at 0 in real testing.</p></div>
+          <div class="card"><h3>throughput_drop</h3><p>Request rate falls below a baseline ratio.</p></div>
+          <div class="card"><h3>cpu_high</h3><p>Utilization vs. container <em>limit</em>, not raw usage.</p></div>
+          <div class="card"><h3>memory_high</h3><p>Same, for memory — feeds both alerts and right-sizing answers.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11. HOW A SIGNAL DETECTOR WORKS -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">11 · Inside the detection layer</div>
+      <h2>How a signal detector actually works</h2>
+      <p class="sub">One shared mechanic — baseline comparison — repeated across all 8 checks.</p>
+      <div class="slide-body">
+        <div class="flow">
+          <div class="flow-step"><div class="t">Current window</div><div class="d">e.g. get_error_rate(service, start, end)</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step"><div class="t">Historical baseline</div><div class="d">get_baseline(service, fn, before=start)</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step decision"><div class="t">Threshold check</div><div class="d">absolute floor OR current &gt; baseline × multiplier</div></div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-step terminal"><div class="t">Signal emitted</div><div class="d">only if it fires — silence otherwise</div></div>
+        </div>
+        <div class="schema">
+          <div class="schema-row"><span class="fname">signal_type</span><span class="ftype">string</span><span class="fdesc">e.g. latency_spike, cpu_high, span_gap</span></div>
+          <div class="schema-row"><span class="fname">confidence</span><span class="ftype">float</span><span class="fdesc">how far past threshold, capped at 1.0</span></div>
+          <div class="schema-row"><span class="fname">affected_services</span><span class="ftype">list[string]</span><span class="fdesc">who the signal is about</span></div>
+          <div class="schema-row"><span class="fname">affected_trace_ids</span><span class="ftype">list[string]</span><span class="fdesc">up to 5 example traces for the LLM to inspect</span></div>
+          <div class="schema-row"><span class="fname">metric_values</span><span class="ftype">dict</span><span class="fdesc">exact current/baseline numbers — becomes evidence</span></div>
+        </div>
+        <div class="card">
+          <h3>Called from three places, same trusted output</h3>
+          <p><code>SignalDetector.detect(start, end)</code> runs all 8 checks and returns every signal that fired. The scheduled scanner polls it every 60s, the dashboard's <code>/alerts</code> calls it per request, and the orchestrator injects its output into <code>build_context()</code> as <strong>measured, trusted facts</strong> — the LLM never has to re-derive them.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12. EVIDENCE TO ROOT CAUSE -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">12 · From evidence to root cause</div>
+      <h2>Findings are the structured unit of hypothesis</h2>
+      <p class="sub">The <code>Finding</code> schema every hypothesis must fit before it can become an answer.</p>
+      <div class="slide-body">
+        <div class="schema">
+          <div class="schema-row"><span class="fname">category</span><span class="ftype">enum</span><span class="fdesc">error · performance · resource · capacity · healthy</span></div>
+          <div class="schema-row"><span class="fname">service</span><span class="ftype">string?</span><span class="fdesc">which service this observation is about, if any</span></div>
+          <div class="schema-row"><span class="fname">summary</span><span class="ftype">string</span><span class="fdesc">one-sentence observation</span></div>
+          <div class="schema-row"><span class="fname">evidence</span><span class="ftype">list[string]</span><span class="fdesc">quoted values that must exist in the fetched context</span></div>
+          <div class="schema-row"><span class="fname">severity</span><span class="ftype">enum</span><span class="fdesc">critical · warning · info</span></div>
+        </div>
+        <div class="card">
+          <h3>Root cause = synthesis, not detection</h3>
+          <p>The detector already found <em>that</em> something's wrong (trusted signal). The LLM's job is narrower and harder: turn several Findings plus raw logs/metrics into one causal sentence — and the <code>answer</code> field must stand alone with real numbers in it, not just point at findings.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 13. RECOMMENDATION GENERATION -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">13 · Recommendation generation</div>
+      <h2>Recommendations are scored by blast radius, not urgency</h2>
+      <p class="sub">The <code>Recommendation</code> schema — and the one hard rule wired into the system prompt itself.</p>
+      <div class="slide-body">
+        <div class="schema">
+          <div class="schema-row"><span class="fname">action</span><span class="ftype">string</span><span class="fdesc">a reviewable config / scaling / code change</span></div>
+          <div class="schema-row"><span class="fname">rationale</span><span class="ftype">string</span><span class="fdesc">why, tied back to the cited evidence</span></div>
+          <div class="schema-row"><span class="fname">risk_level</span><span class="ftype">enum</span><span class="fdesc">low · medium · high — monitoring vs. changing core logic</span></div>
+          <div class="schema-row"><span class="fname">references</span><span class="ftype">list[string]</span><span class="fdesc">populated only when web search cited an external source</span></div>
+        </div>
+        <div class="card">
+          <h3>🚫 Never destructive, by construction</h3>
+          <p><code>requires_human_review</code> is always <code>true</code>. The system prompt explicitly bars destructive actions — no data deletion, no uncontrolled restarts — the model is not trusted to self-certify safety, the schema and prompt enforce it.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 14. REQUEST SEQUENCE -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">14 · Request sequence</div>
+      <h2>What happens when a user asks a question — end to end</h2>
+      <p class="sub">One real round trip, in order.</p>
+      <div class="slide-body">
+        <div class="seq">
+          <div class="seq-row"><span class="seq-actor a1">User</span><span class="seq-msg"><span>POST /ask {question}</span></span><span class="seq-actor a2">Dashboard API</span></div>
+          <div class="seq-row"><span class="seq-actor a2">Dashboard API</span><span class="seq-msg"><span>run(trigger=user_question)</span></span><span class="seq-actor a2">Orchestrator</span></div>
+          <div class="seq-row"><span class="seq-actor a2">Orchestrator</span><span class="seq-msg"><span>build_context(question)</span></span><span class="seq-actor a1">Context Builder</span></div>
+          <div class="seq-row"><span class="seq-actor a1">Context Builder</span><span class="seq-msg"><span>fetch logs / metrics / traces, mode-routed</span></span><span class="seq-actor a1">Retrieval Clients</span></div>
+          <div class="seq-row"><span class="seq-actor a1">Retrieval Clients</span><span class="seq-msg rev"><span>real telemetry rows</span></span><span class="seq-actor a1">Context Builder</span></div>
+          <div class="seq-row"><span class="seq-actor a1">Context Builder</span><span class="seq-msg"><span>rendered context + question</span></span><span class="seq-actor a2">Analyst LLM</span></div>
+          <div class="seq-row"><span class="seq-actor a2">Analyst LLM</span><span class="seq-msg rev"><span>AnalystAnswer (grounded JSON)</span></span><span class="seq-actor a2">Orchestrator</span></div>
+          <div class="seq-row"><span class="seq-actor a2">Orchestrator</span><span class="seq-msg rev"><span>answer + findings + recommendations</span></span><span class="seq-actor a1">User</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 15. CHAOS VALIDATION -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">15 · Chaos engineering validation</div>
+      <h2>Validated against real failures, not fixtures</h2>
+      <p class="sub">Every scenario is a built-in flagd feature flag from the OpenTelemetry Demo itself — no custom fault-injection code.</p>
+      <div class="slide-body">
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Scenario</th><th>flagd flag</th><th>Real effect</th><th>Signal caught</th></tr></thead>
+            <tbody>
+              <tr><td>payment_failure</td><td><code>paymentFailure → 100%</code></td><td>Cards decline; span status never flips to ERROR</td><td>HTTP 5xx fallback</td></tr>
+              <tr><td>payment_outage</td><td><code>paymentUnreachable → on</code></td><td>payment unreachable mid-trace</td><td>span_gap + error_rate_spike</td></tr>
+              <tr><td>queue_backlog</td><td><code>kafkaQueueProblems → on</code></td><td>~35× publish flood, duplicate writes; lag stays 0</td><td>queue_anomaly (publish-rate)</td></tr>
+              <tr><td>overload</td><td><code>adHighCpu → on</code></td><td>ad service CPU saturates (~400% peak)</td><td>cpu_high + latency_spike</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Validation loop = the same discipline as the product</h3>
+          <p>Every AI answer during development was cross-checked directly against live Prometheus/Loki queries — the same evidence-first standard the system holds itself to. That process is what surfaced the hallucination bugs fixed in the grounding layer.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 16. EXPECTED AI OUTPUT -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">16 · Expected AI output</div>
+      <h2>The contract every answer must satisfy</h2>
+      <p class="sub">A trimmed, real-shaped <code>AnalystAnswer</code> — every number below is the kind that must trace back to a fetched telemetry row.</p>
+      <div class="slide-body">
+        <div class="json-block">
+<span class="c">{</span><br>
+&nbsp;&nbsp;<span class="k">"answer"</span>: <span class="s">"payment averages 0.4% CPU, 80.6% memory (113/140MiB) → over-provisioned on CPU, near its memory limit."</span>,<br>
+&nbsp;&nbsp;<span class="k">"findings"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="c">{</span> <span class="k">"category"</span>: <span class="s">"resource"</span>, <span class="k">"service"</span>: <span class="s">"payment"</span>, <span class="k">"severity"</span>: <span class="s">"info"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="k">"evidence"</span>: [<span class="s">"cpu avg=0.4%"</span>, <span class="s">"mem avg=80.6% (113/140MiB)"</span>] <span class="c">}</span><br>
+&nbsp;&nbsp;],<br>
+&nbsp;&nbsp;<span class="k">"recommendations"</span>: [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="c">{</span> <span class="k">"action"</span>: <span class="s">"lower payment's CPU limit"</span>, <span class="k">"risk_level"</span>: <span class="s">"low"</span> <span class="c">}</span><br>
+&nbsp;&nbsp;],<br>
+&nbsp;&nbsp;<span class="k">"services_examined"</span>: [<span class="s">"payment"</span>],<br>
+&nbsp;&nbsp;<span class="k">"requires_human_review"</span>: <span class="n">true</span><br>
+<span class="c">}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 17. GROUNDING SAFEGUARDS -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">17 · Grounding safeguards</div>
+      <h2>Every fix below lives in retrieval code, never in a prompt tweak</h2>
+      <p class="sub">Hallucination bugs were found by cross-checking answers against ground truth, then fixed structurally.</p>
+      <div class="slide-body">
+        <div class="grid grid-2">
+          <div class="card"><h3>🧩 Cross-service log mapping</h3><p>Named-service questions also pull the services where the <em>real</em> reason actually lives.</p></div>
+          <div class="card"><h3>📏 Per-service log capping</h3><p>Each service's log contribution is capped independently — no service can crowd out another's evidence.</p></div>
+          <div class="card"><h3>🔁 Fresh data per comparison</h3><p>Multi-service questions fetch live metrics for every named service, not just the first match.</p></div>
+          <div class="card"><h3>📐 Labeled rows, not raw JSON</h3><p>Dense nested dicts caused real cross-service misattribution in testing; explicit labeled rows fixed it.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 18. TAKEAWAYS -->
+    <section class="slide">
+      <div class="slide-num"><span class="slide-num-value"></span></div>
+      <div class="slide-kicker">18 · Takeaways</div>
+      <h2>Three things to remember</h2>
+      <div class="slide-body">
+        <div class="grid grid-3">
+          <div class="card takeaway"><div class="num">01</div><h3>Deterministic where possible</h3><p>Detection is pure Python and free to run. The LLM is reserved for the one step that actually needs reasoning: synthesis.</p></div>
+          <div class="card takeaway"><div class="num">02</div><h3>Retrieval is the product</h3><p>Grounding lives in <code>build_context()</code>, not the prompt. Mode-routing, cross-service mapping, and per-service capping do the real anti-hallucination work.</p></div>
+          <div class="card takeaway"><div class="num">03</div><h3>Validated against ground truth</h3><p>Every claim in this deck, and every claim the AI makes at runtime, is checked against real Loki/Prometheus/Tempo data — not asserted.</p></div>
+        </div>
+      </div>
+      <div class="slide-foot">End of deck — press Home to restart.</div>
+    </section>
+
+  </div>
+</div>
+
+<div class="deck-chrome" id="dots"></div>
+
+<script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "name": "ai-log-analyst-slides",
+  "private": true,
+  "version": "1.0.0",
+  "description": "PPTX-style technical architecture deck for the AI Log Analysis Assistant",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  }
+}

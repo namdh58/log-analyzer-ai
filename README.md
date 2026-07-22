@@ -190,6 +190,23 @@ python3 -m scripts.run_demo --act 2        # chỉ chạy 1 màn
 python3 -m scripts.run_demo --no-pause     # chạy liền không dừng (dry-run)
 ```
 
+**Slide deck kiến trúc:** `presentation/` — deck 18 slide dạng PPTX, điều hướng bằng phím, nội dung
+lấy từ chính source code + `PROGRESS.md` của repo này (dùng khi trình bày kiến trúc cho người kỹ
+thuật, tách biệt với demo chat trực tiếp ở trên).
+```bash
+cd presentation
+npm install     # zero dependency, không có gì để cài
+npm run dev     # chạy server tĩnh built-in (server.js, chỉ dùng stdlib Node)
+```
+Mở **http://localhost:5174**. Điều khiển: `→`/`Space` slide kế, `←` slide trước, `Home`/`End` về
+đầu/cuối, click mép trái/phải hoặc chấm tiến trình ở dưới để nhảy slide.
+
+Có sẵn bản Markdown tương đương (`presentation/PRESENTATION.md`), mở trực tiếp bằng bất kỳ markdown
+viewer nào, hoặc render ra PDF bằng [Marp](https://marp.app/):
+```bash
+npx @marp-team/marp-cli presentation/PRESENTATION.md -o slides.pdf
+```
+
 ---
 
 ## Cài đặt lần đầu
@@ -254,6 +271,7 @@ results/             analysis_history.jsonl + hội thoại đã lưu (+ archive
 scripts/             run_demo.py (kịch bản demo), scheduled_scan.py (scanner nền)
 tests/               pytest — phần lớn nhanh, 2 file còn lại chạy chaos live/chậm (xem "Chạy test")
 docs/                DEMO_SCRIPT.md (mục 5), PHASE1-5.md (spec) + EXPECTED-PHASE1-5.md (checklist)
+presentation/        slide deck kiến trúc (Node, zero-dep static server), xem mục 5
 ```
 
 ## Lệnh Claude Code có sẵn
