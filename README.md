@@ -10,9 +10,6 @@ lời câu hỏi về hạ tầng qua giao diện chat:
 - ...cộng thêm health check, right-sizing, capacity planning — đây là một **analyst**, không chỉ
   là bộ phát hiện lỗi.
 
-Demo nội bộ, build trong 3 ngày. Không phải hệ thống production. Chi tiết đầy đủ xem `CLAUDE.md`
-(spec) và `PROGRESS.md` (lịch sử build, các quyết định).
-
 > Repo gồm 3 phần: **otel-demo** (cụm microservice mẫu để tạo dữ liệu telemetry thật) +
 > **Grafana/Tempo/Loki/Prometheus** (nơi xem log/trace/metric bằng mắt) + **AI Copilot** (chatbot
 > đọc cùng dữ liệu đó và trả lời bằng ngôn ngữ tự nhiên). Ba phần chạy song song, không phần nào
