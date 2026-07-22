@@ -188,13 +188,63 @@ def step_grafana_panels(page: Page, network_log: list[tuple[str, int]]) -> tuple
     return True, f"{count} iframes, {len(d_solo_responses)} d-solo responses all 200, all bodies non-empty"
 
 
+def step_service_panels(page: Page, network_log: list[tuple[str, int]]) -> tuple[bool, str]:
+    """Per-service dashboard: select a service, expect 4 metric iframes + 1 larger logs iframe."""
+    select = page.locator("#service-select")
+    options = select.locator("option").all_text_contents()
+    if not options:
+        return False, "#service-select has no options"
+    target = options[-1]  # not the default-selected first option, to prove the change listener fires
+    select.select_option(label=target)
+
+    metric_iframes = page.locator("#service-panels iframe")
+    log_iframes = page.locator("#service-logs-panel iframe")
+    metric_count = metric_iframes.count()
+    log_count = log_iframes.count()
+    if metric_count != 4:
+        return False, f"expected 4 iframes in #service-panels, found {metric_count}"
+    if log_count != 1:
+        return False, f"expected 1 iframe in #service-logs-panel, found {log_count}"
+
+    metric_iframes.first.scroll_into_view_if_needed()
+    page.wait_for_timeout(3000)
+    page.screenshot(path=str(SCREENSHOT_DIR / "05_service_panels.png"))
+    log_iframes.first.scroll_into_view_if_needed()
+    page.wait_for_timeout(1000)
+    page.screenshot(path=str(SCREENSHOT_DIR / "06_service_logs.png"))
+
+    all_iframes = [metric_iframes.nth(i) for i in range(metric_count)] + [log_iframes.nth(i) for i in range(log_count)]
+    for i, frame in enumerate(all_iframes):
+        box = frame.bounding_box()
+        if not box or box["width"] <= 0 or box["height"] <= 0:
+            return False, f"iframe {i} has zero size (not rendered)"
+        src = frame.get_attribute("src") or ""
+        if f"var-service={target}" not in src:
+            return False, f"iframe {i} src missing var-service={target}: {src}"
+
+    log_box = log_iframes.first.bounding_box()
+    if not log_box or log_box["height"] <= 300:
+        return False, f"logs iframe not bigger than the metric panels: height={log_box}"
+
+    d_solo_responses = [(u, s) for u, s in network_log if "d-solo" in u and f"var-service={target}" in u]
+    if not d_solo_responses:
+        return False, f"no d-solo responses observed for var-service={target}"
+    non_200 = [(u, s) for u, s in d_solo_responses if s != 200]
+    if non_200:
+        return False, f"non-200 grafana panel responses: {non_200}"
+
+    return True, f"{metric_count} metric + {log_count} logs iframe for '{target}', {len(d_solo_responses)} d-solo responses all 200, logs height={log_box['height']:.0f}"
+
+
 STEPS = [
     ("1. Load dashboard", step_load),
     ("2. New Conversation clears chat + adds sidebar entry", step_new_conversation),
     ("3. Send question, wait for answer card", step_first_question),
     ("4. Send follow-up, second card appears, first stays visible", step_followup),
     ("5. Grafana iframes present and loaded", step_grafana_panels),
+    ("6. Per-service dashboard filters on dropdown selection", step_service_panels),
 ]
+_NEEDS_NETWORK_LOG = {step_grafana_panels, step_service_panels}
 
 
 def main() -> int:
@@ -218,7 +268,7 @@ def main() -> int:
 
         for name, fn in STEPS:
             try:
-                ok, detail = fn(page, network_log) if fn is step_grafana_panels else fn(page)
+                ok, detail = fn(page, network_log) if fn in _NEEDS_NETWORK_LOG else fn(page)
             except Exception as e:
                 ok, detail = False, f"EXCEPTION: {e}\n{traceback.format_exc(limit=3)}"
             results.append((name, ok, detail))

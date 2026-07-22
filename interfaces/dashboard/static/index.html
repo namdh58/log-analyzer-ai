@@ -9,8 +9,9 @@
     --muted: #8b90a0; --accent: #5b8cff; --crit: #ff5c6c; --warn: #ffb454; --info: #5b8cff;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; margin: 0; }
-  body { display: flex; flex-direction: column; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  html, body { margin: 0; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  #app-top { height: 100vh; display: flex; flex-direction: column; }
 
   header { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); flex: none; }
   header h1 { margin: 0; font-size: 18px; }
@@ -57,16 +58,18 @@
   #send-btn { padding: 10px 18px; border-radius: 8px; border: none; background: var(--accent); color: white; font-weight: 600; cursor: pointer; }
   #send-btn:disabled, #question:disabled { opacity: .5; cursor: default; }
 
-  #grafana-section { flex: none; border-top: 1px solid var(--border); padding: 16px 24px; max-height: 46vh; overflow-y: auto; }
+  #grafana-section { border-top: 1px solid var(--border); padding: 16px 24px; }
   #grafana-section h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
-  table.quick { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 14px; }
-  table.quick th, table.quick td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
-  table.quick th { color: var(--muted); font-weight: 500; }
+  #grafana-section h2:not(:first-child) { margin-top: 24px; }
+  #service-select { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: #0d0f16; color: var(--text); font-size: 13px; margin-bottom: 12px; }
   .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 12px; }
   .panels iframe { width: 100%; height: 260px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  .logs-panel { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+  .logs-panel iframe { width: 100%; height: 520px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 </style>
 </head>
 <body>
+<div id="app-top">
 <header>
   <div>
     <h1>Observability AI Copilot</h1>
@@ -100,19 +103,20 @@
     </div>
   </div>
 </div>
+</div>
 
 <div id="grafana-section">
-  <h2>Live resource utilization</h2>
-  <table class="quick" id="resource-table">
-    <thead><tr><th>Service</th><th>CPU avg/peak</th><th>Mem avg/peak</th><th>Req/s</th><th>p95 ms</th><th>Err%</th></tr></thead>
-    <tbody></tbody>
-  </table>
+  <h2>All-service resource usage</h2>
   <div class="panels" id="grafana-panels"></div>
+
+  <h2>Per-service detail</h2>
+  <select id="service-select"></select>
+  <div class="panels" id="service-panels"></div>
+  <div class="logs-panel" id="service-logs-panel"></div>
 </div>
 
 <script>
 const $ = sel => document.querySelector(sel);
-const fmt = (v, d=1, suffix='') => (v === null || v === undefined) ? '—' : v.toFixed(d) + suffix;
 const GRAFANA_BASE = 'http://localhost:3000/grafana/d-solo/ai-copilot-overview/ai-copilot?orgId=1&theme=dark&from=now-30m&to=now';
 
 let currentConversationId = null;
@@ -223,30 +227,38 @@ async function openConversation(id) {
   highlightActiveConversation();
 }
 
-async function loadResources() {
-  const rows = await (await fetch('/resource-summary')).json();
-  $('#resource-table tbody').innerHTML = rows.map(r => `
-    <tr>
-      <td>${r.service}</td>
-      <td>${fmt(r.cpu.avg_pct)} / ${fmt(r.cpu.peak_pct)}%</td>
-      <td>${fmt(r.memory.avg_pct)} / ${fmt(r.memory.peak_pct)}%</td>
-      <td>${fmt(r.request_rate, 2)}</td>
-      <td>${fmt(r.p95_latency_ms, 0)}</td>
-      <td>${fmt(r.error_rate ? r.error_rate * 100 : r.error_rate)}</td>
-    </tr>`).join('');
-}
-
-function loadGrafanaPanels() {
+function loadOverviewPanels() {
   const panels = [
     {id: 1, title: 'CPU % per service'},
     {id: 2, title: 'Memory % per service'},
-    {id: 3, title: 'p95 latency per service'},
-    {id: 4, title: 'Error rate per service'},
   ];
   $('#grafana-panels').innerHTML = panels.map(p =>
-    `<iframe src="${GRAFANA_BASE}&panelId=${p.id}" title="${p.title}" loading="lazy"></iframe>`
+    `<iframe src="${GRAFANA_BASE}&panelId=${p.id}" title="${esc(p.title)}" loading="lazy"></iframe>`
   ).join('');
 }
+
+function renderServicePanels(service) {
+  const varService = `&var-service=${encodeURIComponent(service)}`;
+  const panels = [
+    {id: 6, title: 'Request rate'},
+    {id: 7, title: 'Error rate'},
+    {id: 8, title: 'p95 latency'},
+    {id: 9, title: 'Requests, last 30m'},
+  ];
+  $('#service-panels').innerHTML = panels.map(p =>
+    `<iframe src="${GRAFANA_BASE}&panelId=${p.id}${varService}" title="${esc(service)} — ${esc(p.title)}" loading="lazy"></iframe>`
+  ).join('');
+  $('#service-logs-panel').innerHTML =
+    `<iframe src="${GRAFANA_BASE}&panelId=10${varService}" title="${esc(service)} — Logs, last 30m" loading="lazy"></iframe>`;
+}
+
+async function loadServiceOptions() {
+  const rows = await (await fetch('/resource-summary')).json();
+  const select = $('#service-select');
+  select.innerHTML = rows.map(r => `<option value="${esc(r.service)}">${esc(r.service)}</option>`).join('');
+  if (rows.length) renderServicePanels(rows[0].service);
+}
+$('#service-select').addEventListener('change', e => renderServicePanels(e.target.value));
 
 let bannerAlert = null;
 async function loadAlerts() {
@@ -262,10 +274,9 @@ $('#alert-banner').addEventListener('click', () => { if (bannerAlert) send(banne
 (async function init() {
   await loadConversationList();
   await newConversation(true);
-  loadGrafanaPanels();
-  loadResources();
+  loadOverviewPanels();
+  loadServiceOptions();
   loadAlerts();
-  setInterval(loadResources, 10000);
   setInterval(loadAlerts, 15000);
 })();
 </script>

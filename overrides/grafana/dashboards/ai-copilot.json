@@ -79,6 +79,101 @@
         }
       ],
       "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
+    },
+    {
+      "id": 6,
+      "title": "Request rate ($service)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(traces_span_metrics_calls_total{service_name=\"$service\"}[2m]))",
+          "legendFormat": "req/s",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 7,
+      "title": "Error rate ($service)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "expr": "sum(rate(traces_span_metrics_calls_total{service_name=\"$service\",status_code=\"STATUS_CODE_ERROR\"}[2m])) / sum(rate(traces_span_metrics_calls_total{service_name=\"$service\"}[2m]))",
+          "legendFormat": "error %",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] }
+    },
+    {
+      "id": 8,
+      "title": "p95 latency ($service)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(traces_span_metrics_duration_milliseconds_bucket{service_name=\"$service\"}[2m])))",
+          "legendFormat": "p95 ms",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" }, "overrides": [] }
+    },
+    {
+      "id": 9,
+      "title": "Requests, last 30m ($service)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        {
+          "expr": "sum(rate(traces_span_metrics_calls_total{service_name=\"$service\"}[2m]))",
+          "legendFormat": "req/s",
+          "datasource": { "type": "prometheus", "uid": "webstore-metrics" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "drawStyle": "bars", "fillOpacity": 60 } },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "title": "Logs, last 30m ($service)",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "webstore-logs" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 40 },
+      "targets": [
+        {
+          "expr": "{service_name=\"$service\"}",
+          "datasource": { "type": "loki", "uid": "webstore-logs" }
+        }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" }
     }
-  ]
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "webstore-metrics" },
+        "query": {
+          "query": "label_values(traces_span_metrics_calls_total, service_name)",
+          "refId": "StandardVariableQuery"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      }
+    ]
+  }
 }

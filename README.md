@@ -1,29 +1,37 @@
 # Distributed Observability AI Copilot
 
-An AI copilot that reads real logs, traces, metrics, and resource utilization from a running
-microservice cluster ([OpenTelemetry Demo "Astronomy Shop"](https://github.com/open-telemetry/opentelemetry-demo))
-and answers infrastructure questions in a chat UI:
+AI copilot đọc log/trace/metric/resource utilization **thật** từ một cụm microservice đang chạy
+([OpenTelemetry Demo "Astronomy Shop"](https://github.com/open-telemetry/opentelemetry-demo)) và trả
+lời câu hỏi về hạ tầng qua giao diện chat:
 
-- "Anything abnormal in this time window?"
-- "Anything abnormal in this trace_id?"
-- "What is this failure and how to fix it?"
-- ...plus health checks, right-sizing, and capacity questions — it's an analyst, not just a failure detector.
+- "Có gì bất thường trong khoảng thời gian này không?"
+- "Có gì bất thường trong trace_id này không?"
+- "Lỗi này là gì và cách fix ra sao?"
+- ...cộng thêm health check, right-sizing, capacity planning — đây là một **analyst**, không chỉ
+  là bộ phát hiện lỗi.
 
-Internal 3-day demo build. Not production. See `CLAUDE.md` for the full spec and `PROGRESS.md` for build history/decisions.
+Demo nội bộ, build trong 3 ngày. Không phải hệ thống production. Chi tiết đầy đủ xem `CLAUDE.md`
+(spec) và `PROGRESS.md` (lịch sử build, các quyết định).
 
-## Architecture
+> Repo gồm 3 phần: **otel-demo** (cụm microservice mẫu để tạo dữ liệu telemetry thật) +
+> **Grafana/Tempo/Loki/Prometheus** (nơi xem log/trace/metric bằng mắt) + **AI Copilot** (chatbot
+> đọc cùng dữ liệu đó và trả lời bằng ngôn ngữ tự nhiên). Ba phần chạy song song, không phần nào
+> thay thế phần nào — Grafana dùng để nhìn số liệu thô, chatbot dùng để hỏi nhanh "đang có chuyện
+> gì".
+
+## Kiến trúc tổng quan
 
 ```
 otel-demo (docker compose)          overrides/ (docker compose)
-  shop services + load generator      Tempo (traces), Loki (logs, native OTLP)
-  Kafka, flagd (feature flags)        Prometheus stays stock, Grafana +Tempo/Loki datasources
+  các service của shop + load gen     Tempo (trace), Loki (log, OTLP native)
+  Kafka, flagd (feature flags)        Prometheus giữ nguyên, Grafana +datasource Tempo/Loki
               \                          /
                \                        /
                 v                      v
-        retrieval/ (log/metric/trace clients + PII masking)
+        retrieval/ (client đọc log/metric/trace + che PII)
                       |
-              detection/ (pure-Python signal detector: error rate, latency,
-                          queue backlog, throughput, cpu/mem vs limits)
+              detection/ (bộ phát hiện bất thường bằng Python thuần, không dùng LLM:
+                          error rate, latency, queue backlog, throughput, cpu/mem vs limit)
                       |
               agents/ (LangGraph orchestrator: extract → RCA → fix,
                        LLM_PROVIDER: anthropic | deepseek | ollama)
@@ -31,206 +39,226 @@ otel-demo (docker compose)          overrides/ (docker compose)
           interfaces/dashboard (FastAPI chat UI, localhost:8500)
 ```
 
-Failures are injected via **flagd feature flags** already built into the OTel demo (no chaos code
-patching the demo services). See `chaos/` and "Triggering chaos scenarios" below.
+Lỗi được "tiêm" vào hệ thống qua **flagd feature flags** có sẵn trong OTel demo (không viết code
+chaos can thiệp vào các service của demo). Xem phần "Tạo kịch bản lỗi (chaos)" bên dưới.
 
-## Setup
+---
 
-1. **Clone the demo** (pinned to a release tag, not `main` — this repo was built and verified against `2.2.0`):
-   ```bash
-   git clone --branch 2.2.0 https://github.com/open-telemetry/opentelemetry-demo otel-demo
-   ```
+## 1. AI Chatbot — giao diện chính, ưu tiên demo
 
-2. **Bring up the stack** (demo + Tempo/Loki overrides). Always run from the repo root, with the
-   demo compose file listed first — the override file's relative paths resolve against it:
-   ```bash
-   docker compose -f otel-demo/docker-compose.yml -f overrides/docker-compose.override.yml up -d
-   ```
-   Verify (all confirmed working live): shop UI at http://localhost:8080 → 200, Grafana at
-   http://localhost:3000/api/health → 200, Prometheus http://localhost:9090/-/healthy,
-   Loki http://localhost:3100/ready, Tempo http://localhost:3200/ready. Loki/Tempo legitimately
-   cycle through a harmless `503 "waiting for 15s after being ready"` right after a fresh restart —
-   don't worry unless it's still 503 a minute later.
+**Ở đâu:** `interfaces/dashboard/` (FastAPI app + `static/index.html`), chạy ở
+**http://localhost:8500**.
 
-   Let the load generator run for **~15 min** before demoing questions like "is this
-   over-provisioned?" — right-sizing answers need real utilization history.
-
-3. **Python deps** — there's no `requirements.txt`/`pyproject.toml` in this repo (a deliberate gap
-   noted in `PROGRESS.md`) and the `.venv` if present at repo root is a leftover from a Playwright
-   experiment (only has `playwright`/`greenlet` in it) — **don't use it for the app**. Install
-   straight to user site-packages instead:
-   ```bash
-   python3 -m pip install --user pydantic fastapi uvicorn requests pyyaml langgraph pytest anthropic openai
-   ```
-   (Add `--break-system-packages` if pip refuses on an externally-managed system Python.)
-
-4. **Configure `.env`** (copy from `.env.example`):
-   ```bash
-   cp .env.example .env
-   ```
-   Set `LLM_PROVIDER` (`anthropic` default) and its key (`ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY`),
-   or point `OLLAMA_URL` at a local Ollama for a zero-API-cost run (no Ollama server was reachable
-   in this environment when checked — install/start one first if you want that path).
-
-   **Important, verified by running it: `.env` is not auto-loaded.** Only `chaos/flags.py` reads it
-   itself. Every other entry point (`interfaces.dashboard.app`, `scripts.run_demo`,
-   `scripts.scheduled_scan`, the test suite) just reads `os.environ` directly — if you only have a
-   `.env` file and never exported it, `LLM_PROVIDER` silently falls back to `anthropic` with no key
-   and every analysis call crashes with a 500. Export it into the shell first:
-   ```bash
-   set -a && source .env && set +a
-   ```
-   Do this once per shell/session before any of the commands below.
-
-## Running it
-
-**Chat dashboard** (primary interface):
+**Chạy:**
 ```bash
-set -a && source .env && set +a
+set -a && source .env && set +a     # bắt buộc — xem phần "Biến môi trường .env" bên dưới
 python3 -m interfaces.dashboard.app
 ```
-Open http://localhost:8500 (confirmed serving `index.html`, 200). Posting a question to `/ask` runs
-the full LangGraph pipeline; **as of this check, the configured `DEEPSEEK_API_KEY` is an OpenRouter
-key that's out of credit (`402` from every `/ask` call)** — this matches the known issue already
-logged in `PROGRESS.md`. Top up OpenRouter, switch to a real `ANTHROPIC_API_KEY`, or run Ollama
-locally before demoing.
+Mở http://localhost:8500 → là màn hình chat, gõ câu hỏi rồi Enter. Mỗi câu hỏi chạy qua toàn bộ
+pipeline LangGraph (lấy dữ liệu → phát hiện bất thường → LLM phân tích → trả lời), câu trả lời
+luôn bám vào số liệu thật lấy từ Loki/Tempo/Prometheus (không được bịa số).
 
-**Chaos control panel** (button-driven UI to trigger/stop scenarios + reset for a clean demo take —
-see "Triggering chaos scenarios" below for full details):
-```bash
-python3 -m interfaces.chaos_panel.app
-```
-Open http://localhost:8600.
+Có thể hỏi bất kỳ lúc nào, kể cả khi hệ thống đang bình thường:
+- "How is the system doing right now?"
+- "Is the payment service over-provisioned?"
+- "If traffic tripled, which service saturates first?"
 
-**Background scanner** (polls for anomalies every 60s, fires an alert into the chat/history when found):
+Khi có chaos đang chạy (xem phần 3), hỏi tiếp kiểu:
+- "What's wrong with checkout right now?"
+- "Which trace_id shows this failure?"
+- "What should I do to fix it?"
+
+**Lưu ý quan trọng khi chạy thử:** `.env` **không tự động được load** bởi app — chỉ
+`chaos/flags.py` tự đọc `.env`, còn `interfaces.dashboard.app`, `scripts.run_demo`,
+`scripts.scheduled_scan` và bộ test đều đọc thẳng `os.environ`. Nếu quên `source .env`,
+`LLM_PROVIDER` sẽ âm thầm rơi về `anthropic` không có key và mọi câu hỏi trả về lỗi 500. Luôn chạy
+`set -a && source .env && set +a` trước, mỗi lần mở terminal mới.
+
+**Scanner nền** (tự quét bất thường mỗi 60s, tự đẩy cảnh báo vào lịch sử/chat khi phát hiện):
 ```bash
 set -a && source .env && set +a
 python3 -m scripts.scheduled_scan
 ```
 
-**Scripted demo** (3-act presenter-paced run — healthy questions, live CPU alert, live payment failure):
+---
+
+## 2. Grafana — nhìn số liệu thô
+
+**Ở đâu:** ship kèm otel-demo, đã được thêm datasource Tempo + Loki qua `overrides/grafana/`.
+Chạy ở **http://localhost:3000** (đăng nhập xem `overrides/` hoặc mặc định `admin/admin`).
+
+Dashboard đáng chú ý: **`overrides/grafana/dashboards/ai-copilot.json`** — dashboard riêng cho
+copilot, có ô chọn `$service` (dropdown, tự động load danh sách service từ metrics) và các panel:
+- **Request rate** theo service đang chọn
+- **Error rate** theo service đang chọn
+- **p95 latency** theo service đang chọn
+- **Requests 30 phút gần nhất** (dạng cột)
+- **Logs 30 phút gần nhất** của service đang chọn (đọc thẳng từ Loki)
+
+Dùng dashboard này để đối chiếu bằng mắt với câu trả lời của chatbot — ví dụ chatbot báo
+`payment` đang error_rate_spike thì mở dashboard, chọn `service=payment`, xem panel Error rate có
+khớp không.
+
+Các panel khác (log viewer chung, trace search...) nằm trong cùng thư mục
+`overrides/grafana/dashboards/`.
+
+---
+
+## 3. otel-demo — nguồn dữ liệu thật
+
+**Ở đâu:** thư mục `otel-demo/` — đây là **git clone** của
+[opentelemetry-demo](https://github.com/open-telemetry/opentelemetry-demo), **không** được commit
+vào git của repo này (xem `.gitignore`). Nếu thư mục trống, clone lại:
+
 ```bash
-set -a && source .env && set +a
-python3 -m scripts.run_demo               # all 3 acts, paced with [Enter]
-python3 -m scripts.run_demo --act 2        # just one act
-python3 -m scripts.run_demo --no-pause     # unattended dry-run
+git clone --branch 2.2.0 https://github.com/open-telemetry/opentelemetry-demo otel-demo
+```
+(chốt version `2.2.0`, không dùng `main`, vì repo này được build và test với bản đó.)
+
+Đây là một shop giả lập (Astronomy Shop) gồm hơn chục microservice (frontend, cart, checkout,
+payment, ad, currency, shipping...) + load generator tự sinh traffic + Kafka + **flagd**
+(feature-flag server dùng để tiêm lỗi, xem phần 4).
+
+**Bật toàn bộ stack** (demo + Tempo/Loki override — luôn chạy từ root repo, file demo phải liệt kê
+trước vì đường dẫn tương đối trong file override tính theo file demo):
+```bash
+docker compose -f otel-demo/docker-compose.yml -f overrides/docker-compose.override.yml up -d
 ```
 
-**Tests** — `pytest.ini` only *registers* the `e2e` marker, it doesn't deselect it, and one file
-(`tests/test_detection_scenarios.py`) runs real 180s+ chaos scenarios against the live stack without
-even being marked `e2e`. Confirmed live: a bare `python -m pytest` hangs for 15+ minutes firing real
-chaos scenarios — it is **not** a fast/offline command here despite the name. Use:
-```bash
-# fast, deterministic-ish (still hits live Loki/Tempo/Prometheus for real numbers, ~2s)
-python3 -m pytest -q --ignore=tests/test_detection_scenarios.py -m "not e2e"
+Kiểm tra đã lên đủ:
+| Thành phần | Kiểm tra |
+|---|---|
+| Shop UI | http://localhost:8080 → 200 |
+| Grafana | http://localhost:3000/api/health → 200 |
+| Prometheus | http://localhost:9090/-/healthy |
+| Loki | http://localhost:3100/ready |
+| Tempo | http://localhost:3200/ready |
 
-# slow, live chaos scenarios (~15+ min total)
-python3 -m pytest tests/test_detection_scenarios.py -v -s
+Loki/Tempo có thể trả `503 "waiting for 15s after being ready"` ngay sau khi mới bật — bình
+thường, chỉ lo nếu sau 1 phút vẫn còn 503.
 
-# slow, live chaos + real LLM calls (~8 min, needs working LLM credentials)
-python3 -m pytest tests/test_e2e_scenario.py -v -s -m e2e
-```
-Note: a couple of the "fast" tests (`test_retrieval.py`, `test_context_builder.py`) query a
-hardcoded historical `trace_id` against the live Tempo/Loki — they can fail after
-`docker compose down -v` or once local retention ages that trace out, independent of any code change.
+**Để load generator chạy khoảng ~15 phút** trước khi demo các câu hỏi kiểu "is this
+over-provisioned?" — câu trả lời right-sizing cần lịch sử utilization thật, chạy mới bật thì chưa
+đủ dữ liệu.
 
-## Triggering chaos scenarios
+---
 
-All failures are existing `flagd` flags in `otel-demo/src/flagd/demo.flagd.json`, flipped by editing
-that file in place (flagd hot-reloads it — no restart needed). `chaos/flags.py` does the edit;
-`chaos/scenarios.py` wraps it into named, timed runs.
+## 4. Tạo kịch bản lỗi (chaos) để demo
 
-### Chaos control panel (API + UI, no CLI needed)
+Lỗi = flag có sẵn trong `otel-demo/src/flagd/demo.flagd.json`, được `chaos/flags.py` sửa trực tiếp
+(flagd tự hot-reload file, không cần restart).
 
-`interfaces/chaos_panel` is a separate small FastAPI service — a button-driven UI to run/stop each
-scenario and to reset the environment between demo takes, so you don't need a terminal during the demo.
+**Cách dễ nhất — Chaos control panel** (UI có nút bấm, không cần terminal thứ hai khi demo):
 ```bash
 python3 -m interfaces.chaos_panel.app
 ```
-Open **http://localhost:8600**. Confirmed live: starting a scenario flips the flag immediately and runs
-it in the background (HTTP call returns right away, no blocking); only one scenario can run at a time
-(a second `start` while one is active returns `409`); **Stop** cancels the wait early, resets the flag
-immediately, and still logs the correct (shortened) end time.
+Mở **http://localhost:8600** → bấm nút để start/stop từng kịch bản, và có nút **Reset** để dọn
+sạch môi trường (archive lịch sử cũ vào `results/archive/<timestamp>/`, tắt hết flag) trước một
+lượt demo mới.
 
-The panel also has a **"Run order + fetch logs"** button — this drives the shop's actual main
-checkout logic (add-to-cart → checkout, exactly what the demo's own load generator does) rather than
-any chaos flag, and returns the resulting `trace_id` plus its logs, so you can confirm log
-retrieval/correlation works *before* testing a failure case. Confirmed live end-to-end: a manually
-crafted `traceparent: 00-<trace_id>-<span_id>-01` header sent on the cart/checkout calls propagates
-through `frontend-proxy` → `cart` → `checkout` (all OTel-instrumented services honor an incoming W3C
-trace context by default), so the trace_id we generate is the real one — Tempo returned the full trace
-and Loki returned 20 real log lines keyed to it, no polling needed once ingestion caught up (confirmed
-both the `wait=0` empty-immediately case and the `wait=10` case that then found the logs ~1s later).
-
-Endpoints, if you want to script it:
-
-| Endpoint | Effect |
-|---|---|
-| `POST /normal-flow/run` | places one **real** order through the shop's own add-to-cart + checkout logic (no chaos) with a hand-crafted W3C `traceparent` header, and returns the resulting `trace_id` |
-| `GET /logs/{trace_id}?wait=10` | fetches that trace's logs from Loki, polling up to `wait` seconds since ingestion lags a few seconds behind the request |
-| `GET /status` | current running scenario (if any) + live flagd state of all 4 flags |
-| `POST /scenarios/{name}/start?duration=180` | start a case (`payment_failure`, `payment_outage`, `queue_backlog`, `overload`) |
-| `POST /scenarios/{name}/stop` | cancel early, flag reset immediately |
-| `POST /reset` | **clean environment for a fresh case**: force all flags off, then archive (not delete) any non-empty `results/analysis_history.jsonl`, `results/conversations/`, `chaos/injected_events.log` into `results/archive/<timestamp>/` and leave those paths empty — so the dashboard's history/conversation list and the injected-events log start clean for the next case, without losing prior runs. Confirmed live: after reset, `results/analysis_history.jsonl` no longer exists (dashboard's `/history` already tolerates a missing file → returns `[]`) and the old data sat untouched under `results/archive/20260722T164001Z/`. |
-
-Note: if `scripts.scheduled_scan` is running as its own process, its 5-minute dedupe memory isn't
-touched by `/reset` — restart that process too if you want it to re-fire on a repeated signal right away.
-
-**Run one scenario end-to-end** (CLI alternative, blocks until done) (enables the flag, waits, disables it, logs to `chaos/injected_events.log`):
+**Cách dòng lệnh** (chạy 1 kịch bản, tự đợi rồi tự tắt flag):
 ```bash
-python3 -m chaos.scenarios <name> [--duration 120]
+python3 -m chaos.scenarios <name> --duration 120
 ```
-Confirmed live (`python3 -m chaos.scenarios overload --duration 5`): flag flips to `on`, waits, then
-resets to `off` in `otel-demo/src/flagd/demo.flagd.json` — no restart needed, flagd hot-reloads the
-mounted file. `payment_failure`/`payment_outage`/`queue_backlog` need real checkout traffic to
-manifest, so PROGRESS.md's own scenario tests use **180s**, not the 120s default — expect to bump
-`--duration` for those three on a low-traffic stack.
 
-| Scenario name | flagd flag | Expected signal | Expected anomaly_type |
+4 kịch bản:
+| Tên | Flag trong flagd | Bất thường mong đợi | Loại lỗi |
 |---|---|---|---|
 | `payment_failure` | `paymentFailure` → 100% | error_rate_spike | service_failure |
 | `payment_outage` | `paymentUnreachable` → on | span_gap + error_rate_spike | broken_trace / timeout |
 | `queue_backlog` | `kafkaQueueProblems` → on | queue_anomaly | message_loss |
 | `overload` | `adHighCpu` → on | latency_spike (+ throughput_drop) | resource_exhaustion |
 
-Ctrl+C during a run resets all flags to off automatically (`install_signal_handlers`), so a killed
-scenario never leaves the demo broken.
+`payment_failure`/`payment_outage`/`queue_backlog` cần traffic thật đi qua checkout mới thấy hiệu
+ứng rõ, nên nếu traffic thấp thì tăng `--duration` lên ~180s thay vì mặc định 120s.
 
-**Manual flag control** (no timer, e.g. to leave a failure running while you poke around):
-```python
-from chaos.flags import set_flag, reset_all
-set_flag("paymentFailure", "100%")   # or "adHighCpu", "on" etc.
-reset_all()                          # turn everything back off
+Ctrl+C giữa chừng sẽ tự tắt hết flag (an toàn, không để demo bị kẹt ở trạng thái lỗi).
+
+---
+
+## 5. Kịch bản trình diễn (presentation)
+
+**Script cho người thuyết trình:** `docs/DEMO_SCRIPT.md` — cue card từng bước: câu hỏi mở đầu (hệ
+thống bình thường) → 4 case chaos lần lượt, mỗi case có câu hỏi chính + câu hỏi follow-up gợi ý.
+Chạy chat ở một cửa sổ, chạy lệnh `chaos.scenarios` ở cửa sổ thứ hai để chat không bị chiếm dụng.
+
+**Script tự động (presenter-paced, 3 màn):**
+```bash
+set -a && source .env && set +a
+python3 -m scripts.run_demo               # chạy đủ 3 màn, dừng chờ Enter giữa các bước
+python3 -m scripts.run_demo --act 2        # chỉ chạy 1 màn
+python3 -m scripts.run_demo --no-pause     # chạy liền không dừng (dry-run)
 ```
 
-Or flip flags directly in the flagd UI at http://localhost:8080/feature.
+---
 
-**End-to-end via Claude Code**: `/scenario <name>` runs the scenario, waits for telemetry to land,
-then runs detection + the full agent pipeline and reports signals → RCA → fix, step by step — the
-fastest way to sanity-check the pipeline after a change.
+## Cài đặt lần đầu
 
-## Repo layout
+1. **Clone otel-demo** — xem mục 3 ở trên.
+
+2. **Bật docker compose** — xem mục 3 ở trên.
+
+3. **Cài Python deps** — repo này chưa có `requirements.txt`/`pyproject.toml` (thiếu sót đã ghi
+   chú trong `PROGRESS.md`). Thư mục `.venv` ở root nếu có là rác còn sót từ thử nghiệm Playwright
+   (chỉ có `playwright`/`greenlet`) — **đừng dùng venv đó cho app**. Cài thẳng vào user
+   site-packages:
+   ```bash
+   python3 -m pip install --user pydantic fastapi uvicorn requests pyyaml langgraph pytest anthropic openai
+   ```
+   (thêm `--break-system-packages` nếu pip từ chối vì Python hệ thống bị khoá externally-managed).
+
+4. **Tạo file `.env`**:
+   ```bash
+   cp .env.example .env
+   ```
+   Set `LLM_PROVIDER` (mặc định `anthropic`) và key tương ứng (`ANTHROPIC_API_KEY` /
+   `DEEPSEEK_API_KEY`), hoặc trỏ `OLLAMA_URL` vào Ollama chạy local nếu muốn khỏi tốn phí API.
+
+   **Nhớ:** `.env` không tự load, phải `set -a && source .env && set +a` mỗi phiên terminal mới
+   trước khi chạy bất kỳ lệnh Python nào ở trên (xem lại phần 1).
+
+---
+
+## Chạy test
+
+```bash
+# nhanh (vẫn gọi Loki/Tempo/Prometheus thật để lấy số liệu, ~2s)
+python3 -m pytest -q --ignore=tests/test_detection_scenarios.py -m "not e2e"
+
+# chậm, chạy chaos thật trên stack live (~15+ phút)
+python3 -m pytest tests/test_detection_scenarios.py -v -s
+
+# chậm, chaos thật + gọi LLM thật (~8 phút, cần LLM credential hoạt động)
+python3 -m pytest tests/test_e2e_scenario.py -v -s -m e2e
+```
+Lưu ý: `pytest.ini` chỉ *đăng ký* marker `e2e`, không tự loại trừ nó, và
+`tests/test_detection_scenarios.py` chạy chaos thật dù không gắn marker `e2e` — chạy `pytest` trần
+không tham số sẽ treo 15+ phút, **không phải** lệnh test nhanh dù tên file trông vô hại.
+
+---
+
+## Vị trí các thành phần trong repo
 
 ```
-otel-demo/          git clone of opentelemetry-demo (not vendored into this repo's git)
-overrides/          docker-compose.override.yml + Tempo/Loki/Grafana configs
-chaos/              flags.py (edit demo.flagd.json), scenarios.py (named timed runs)
-retrieval/          log/metric/trace clients + PII masking — everything leaving here is masked
-detection/          pure-Python signal detector (no LLM)
-agents/             schemas, LLM client (anthropic/deepseek/ollama), web search, context builder,
-                    analyst, LangGraph orchestrator
-interfaces/dashboard    FastAPI chat app + static UI (localhost:8500)
-interfaces/chaos_panel  FastAPI chaos control panel: start/stop scenarios, reset env (localhost:8600)
-results/            analysis_history.jsonl + saved conversations (+ archive/ from chaos_panel resets)
-scripts/            run_demo.py (presenter demo), scheduled_scan.py (background scanner)
-tests/              pytest — mostly fast (some still hit live infra), plus 2 live-chaos files
-                    that are slow/expensive and must be run explicitly (see "Tests" above)
-docs/               PHASE1-5.md (specs) + EXPECTED-PHASE1-5.md (verification checklists)
+otel-demo/          clone của opentelemetry-demo (không commit vào git repo này)
+overrides/           docker-compose.override.yml + config Tempo/Loki/Grafana
+  grafana/dashboards/ai-copilot.json   ← dashboard Grafana riêng cho copilot (mục 2)
+chaos/               flags.py (sửa demo.flagd.json), scenarios.py (chạy kịch bản có timer)
+retrieval/           client đọc log/metric/trace + che PII — mọi dữ liệu ra khỏi đây đã được mask
+detection/           bộ phát hiện bất thường, Python thuần, không LLM
+agents/              schema, LLM client (anthropic/deepseek/ollama), web search, context builder,
+                     analyst, LangGraph orchestrator
+interfaces/dashboard     AI chatbot (FastAPI + UI tĩnh), localhost:8500 — mục 1
+interfaces/chaos_panel   Chaos control panel, localhost:8600 — mục 4
+results/             analysis_history.jsonl + hội thoại đã lưu (+ archive/ khi reset chaos panel)
+scripts/             run_demo.py (kịch bản demo), scheduled_scan.py (scanner nền)
+tests/               pytest — phần lớn nhanh, 2 file còn lại chạy chaos live/chậm (xem "Chạy test")
+docs/                DEMO_SCRIPT.md (mục 5), PHASE1-5.md (spec) + EXPECTED-PHASE1-5.md (checklist)
 ```
 
-## Custom Claude Code commands
+## Lệnh Claude Code có sẵn
 
-- `/phase <n>` — work a project phase's acceptance criteria in order.
-- `/verify <n>` — check a phase against its EXPECTED checklist (verify only, no edits).
-- `/scenario <name>` — run one chaos scenario end-to-end, show detection → analyst answer.
-- `/handoff` — update PROGRESS.md from git state at the end of a session.
+- `/phase <n>` — làm việc theo checklist của 1 phase.
+- `/verify <n>` — đối chiếu 1 phase với file EXPECTED tương ứng (chỉ kiểm tra, không sửa).
+- `/scenario <name>` — chạy 1 kịch bản chaos end-to-end, in ra detection → câu trả lời của analyst.
+- `/handoff` — cập nhật PROGRESS.md từ git state cuối phiên làm việc.
