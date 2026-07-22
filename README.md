@@ -36,9 +36,9 @@ patching the demo services). See `chaos/` and "Triggering chaos scenarios" below
 
 ## Setup
 
-1. **Clone the demo** (pinned to a release tag, not `main`):
+1. **Clone the demo** (pinned to a release tag, not `main` — this repo was built and verified against `2.2.0`):
    ```bash
-   git clone --branch v2.2.0 https://github.com/open-telemetry/opentelemetry-demo otel-demo
+   git clone --branch 2.2.0 https://github.com/open-telemetry/opentelemetry-demo otel-demo
    ```
 
 2. **Bring up the stack** (demo + Tempo/Loki overrides). Always run from the repo root, with the
@@ -46,51 +46,86 @@ patching the demo services). See `chaos/` and "Triggering chaos scenarios" below
    ```bash
    docker compose -f otel-demo/docker-compose.yml -f overrides/docker-compose.override.yml up -d
    ```
-   Verify: shop UI at http://localhost:8080, Grafana at http://localhost:3000 (Prometheus, Loki,
-   Tempo datasources all query OK).
+   Verify (all confirmed working live): shop UI at http://localhost:8080 → 200, Grafana at
+   http://localhost:3000/api/health → 200, Prometheus http://localhost:9090/-/healthy,
+   Loki http://localhost:3100/ready, Tempo http://localhost:3200/ready. Loki/Tempo legitimately
+   cycle through a harmless `503 "waiting for 15s after being ready"` right after a fresh restart —
+   don't worry unless it's still 503 a minute later.
 
    Let the load generator run for **~15 min** before demoing questions like "is this
    over-provisioned?" — right-sizing answers need real utilization history.
 
-3. **Python deps** — no pinned lockfile in this repo; install what's imported:
+3. **Python deps** — there's no `requirements.txt`/`pyproject.toml` in this repo (a deliberate gap
+   noted in `PROGRESS.md`) and the `.venv` if present at repo root is a leftover from a Playwright
+   experiment (only has `playwright`/`greenlet` in it) — **don't use it for the app**. Install
+   straight to user site-packages instead:
    ```bash
-   python3 -m pip install --user pydantic fastapi uvicorn requests pyyaml langgraph pytest
+   python3 -m pip install --user pydantic fastapi uvicorn requests pyyaml langgraph pytest anthropic openai
    ```
-   (If your host blocks system pip installs, add `--break-system-packages`, or use a venv if one is available.)
+   (Add `--break-system-packages` if pip refuses on an externally-managed system Python.)
 
 4. **Configure `.env`** (copy from `.env.example`):
    ```bash
    cp .env.example .env
    ```
-   Minimum to run: set `LLM_PROVIDER` (`anthropic` default) and its API key
-   (`ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY`, or point `OLLAMA_URL` at a local Ollama for a
-   zero-API-cost run). `SEARCH_PROVIDER=none` works fine; `tavily`/`anthropic` add web search.
+   Set `LLM_PROVIDER` (`anthropic` default) and its key (`ANTHROPIC_API_KEY` / `DEEPSEEK_API_KEY`),
+   or point `OLLAMA_URL` at a local Ollama for a zero-API-cost run (no Ollama server was reachable
+   in this environment when checked — install/start one first if you want that path).
+
+   **Important, verified by running it: `.env` is not auto-loaded.** Only `chaos/flags.py` reads it
+   itself. Every other entry point (`interfaces.dashboard.app`, `scripts.run_demo`,
+   `scripts.scheduled_scan`, the test suite) just reads `os.environ` directly — if you only have a
+   `.env` file and never exported it, `LLM_PROVIDER` silently falls back to `anthropic` with no key
+   and every analysis call crashes with a 500. Export it into the shell first:
+   ```bash
+   set -a && source .env && set +a
+   ```
+   Do this once per shell/session before any of the commands below.
 
 ## Running it
 
 **Chat dashboard** (primary interface):
 ```bash
-python -m interfaces.dashboard.app
+set -a && source .env && set +a
+python3 -m interfaces.dashboard.app
 ```
-Open http://localhost:8500.
+Open http://localhost:8500 (confirmed serving `index.html`, 200). Posting a question to `/ask` runs
+the full LangGraph pipeline; **as of this check, the configured `DEEPSEEK_API_KEY` is an OpenRouter
+key that's out of credit (`402` from every `/ask` call)** — this matches the known issue already
+logged in `PROGRESS.md`. Top up OpenRouter, switch to a real `ANTHROPIC_API_KEY`, or run Ollama
+locally before demoing.
 
 **Background scanner** (polls for anomalies every 60s, fires an alert into the chat/history when found):
 ```bash
-python -m scripts.scheduled_scan
+set -a && source .env && set +a
+python3 -m scripts.scheduled_scan
 ```
 
 **Scripted demo** (3-act presenter-paced run — healthy questions, live CPU alert, live payment failure):
 ```bash
-python -m scripts.run_demo               # all 3 acts, paced with [Enter]
-python -m scripts.run_demo --act 2        # just one act
-python -m scripts.run_demo --no-pause     # unattended dry-run
+set -a && source .env && set +a
+python3 -m scripts.run_demo               # all 3 acts, paced with [Enter]
+python3 -m scripts.run_demo --act 2        # just one act
+python3 -m scripts.run_demo --no-pause     # unattended dry-run
 ```
 
-**Tests**:
+**Tests** — `pytest.ini` only *registers* the `e2e` marker, it doesn't deselect it, and one file
+(`tests/test_detection_scenarios.py`) runs real 180s+ chaos scenarios against the live stack without
+even being marked `e2e`. Confirmed live: a bare `python -m pytest` hangs for 15+ minutes firing real
+chaos scenarios — it is **not** a fast/offline command here despite the name. Use:
 ```bash
-python -m pytest                          # unit/deterministic tests (fast, run against fixtures)
-python -m pytest -m e2e                   # smoke tests against the live stack (slow)
+# fast, deterministic-ish (still hits live Loki/Tempo/Prometheus for real numbers, ~2s)
+python3 -m pytest -q --ignore=tests/test_detection_scenarios.py -m "not e2e"
+
+# slow, live chaos scenarios (~15+ min total)
+python3 -m pytest tests/test_detection_scenarios.py -v -s
+
+# slow, live chaos + real LLM calls (~8 min, needs working LLM credentials)
+python3 -m pytest tests/test_e2e_scenario.py -v -s -m e2e
 ```
+Note: a couple of the "fast" tests (`test_retrieval.py`, `test_context_builder.py`) query a
+hardcoded historical `trace_id` against the live Tempo/Loki — they can fail after
+`docker compose down -v` or once local retention ages that trace out, independent of any code change.
 
 ## Triggering chaos scenarios
 
@@ -100,8 +135,13 @@ that file in place (flagd hot-reloads it — no restart needed). `chaos/flags.py
 
 **Run one scenario end-to-end** (enables the flag, waits, disables it, logs to `chaos/injected_events.log`):
 ```bash
-python -m chaos.scenarios <name> [--duration 120]
+python3 -m chaos.scenarios <name> [--duration 120]
 ```
+Confirmed live (`python3 -m chaos.scenarios overload --duration 5`): flag flips to `on`, waits, then
+resets to `off` in `otel-demo/src/flagd/demo.flagd.json` — no restart needed, flagd hot-reloads the
+mounted file. `payment_failure`/`payment_outage`/`queue_backlog` need real checkout traffic to
+manifest, so PROGRESS.md's own scenario tests use **180s**, not the 120s default — expect to bump
+`--duration` for those three on a low-traffic stack.
 
 | Scenario name | flagd flag | Expected signal | Expected anomaly_type |
 |---|---|---|---|
@@ -139,7 +179,8 @@ agents/             schemas, LLM client (anthropic/deepseek/ollama), web search,
 interfaces/dashboard FastAPI chat app + static UI
 results/            analysis_history.jsonl + saved conversations
 scripts/            run_demo.py (presenter demo), scheduled_scan.py (background scanner)
-tests/              pytest — fixtures-based unit tests + `-m e2e` live smoke tests
+tests/              pytest — mostly fast (some still hit live infra), plus 2 live-chaos files
+                    that are slow/expensive and must be run explicitly (see "Tests" above)
 docs/               PHASE1-5.md (specs) + EXPECTED-PHASE1-5.md (verification checklists)
 ```
 
