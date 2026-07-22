@@ -30,7 +30,17 @@ services:
       loki:
         condition: service_started
 
+  prometheus:
+    deploy:
+      resources:
+        limits:
+          memory: 400M
+
   grafana:
+    deploy:
+      resources:
+        limits:
+          memory: 512M
     ports:
       - "3000:3000"
     environment:
