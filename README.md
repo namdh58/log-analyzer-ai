@@ -19,6 +19,86 @@ Demo nội bộ, build trong 3 ngày. Không phải hệ thống production. Chi
 > thay thế phần nào — Grafana dùng để nhìn số liệu thô, chatbot dùng để hỏi nhanh "đang có chuyện
 > gì".
 
+## Hướng dẫn chạy — từng bước (dùng OpenRouter)
+
+Project hỗ trợ nhiều LLM provider (`anthropic` / `deepseek` / `ollama`), nhưng hướng dẫn dưới đây
+chỉ dùng **OpenRouter** (qua provider `deepseek`, trỏ base URL sang OpenRouter — xem giải thích ở
+bước 5). Không cần tài khoản Anthropic hay cài Ollama.
+
+### Bước 1 — Lấy API key OpenRouter
+
+1. Vào https://openrouter.ai → **Sign in** (đăng nhập bằng Google/GitHub đều được, không cần thẻ
+   để tạo tài khoản).
+2. Vào https://openrouter.ai/keys → bấm **Create Key**, đặt tên bất kỳ (vd. `observability-ai`) →
+   copy key, dạng `sk-or-v1-...` (chỉ hiện 1 lần, lưu lại ngay).
+3. Vào https://openrouter.ai/settings/credits → **nạp credit** (tối thiểu vài đô là đủ demo).
+   Bắt buộc — không có credit thì mọi câu hỏi trong chat sẽ lỗi `402 Payment Required` giữa chừng
+   (đã từng gặp lỗi này khi hết credit trong lúc demo, xem `PROGRESS.md`). Kiểm tra lại
+   credit trước khi demo/present.
+
+### Bước 2 — Clone otel-demo (nguồn dữ liệu thật)
+
+```bash
+git clone --branch 2.2.0 https://github.com/open-telemetry/opentelemetry-demo otel-demo
+```
+Chốt version `2.2.0`, không dùng `main` (repo này build/test với bản đó). Chi tiết xem mục 3 bên dưới.
+
+### Bước 3 — Bật docker compose (demo + Tempo/Loki/Grafana)
+
+Chạy từ root repo, file demo phải liệt kê trước:
+```bash
+docker compose -f otel-demo/docker-compose.yml -f overrides/docker-compose.override.yml up -d
+```
+Đợi vài phút rồi kiểm tra: shop UI http://localhost:8080 → 200, Grafana
+http://localhost:3000/api/health → 200, Prometheus http://localhost:9090/-/healthy, Loki
+http://localhost:3100/ready, Tempo http://localhost:3200/ready.
+
+### Bước 4 — Cài Python deps
+
+Repo chưa có `requirements.txt`/`pyproject.toml` — cài thẳng vào user site-packages:
+```bash
+python3 -m pip install --user pydantic fastapi uvicorn requests pyyaml langgraph pytest anthropic openai
+```
+(thêm `--break-system-packages` nếu pip từ chối vì Python hệ thống bị khoá externally-managed).
+Gói `openai` là bắt buộc dù không dùng OpenAI — provider `deepseek`/OpenRouter dùng chung SDK này
+(OpenAI-compatible API).
+
+### Bước 5 — Tạo `.env` với key OpenRouter
+
+```bash
+cp .env.example .env
+```
+Sửa các dòng sau trong `.env` (dán key lấy ở Bước 1 vào `DEEPSEEK_API_KEY`):
+```bash
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=sk-or-v1-...............................
+DEEPSEEK_MODEL=deepseek/deepseek-chat
+DEEPSEEK_BASE_URL=https://openrouter.ai/api/v1
+```
+`deepseek` provider vốn gọi thẳng API DeepSeek gốc, nhưng vì dùng OpenAI-compatible SDK nên chỉ
+cần đổi `DEEPSEEK_BASE_URL` sang OpenRouter + đổi `DEEPSEEK_MODEL` thành tên model kiểu OpenRouter
+(`deepseek/deepseek-chat`) là dùng được OpenRouter key mà không cần sửa code. Có thể đổi
+`DEEPSEEK_MODEL` sang model OpenRouter khác nếu muốn (xem danh sách tại
+https://openrouter.ai/models).
+
+Load `.env` vào shell — **bắt buộc mỗi lần mở terminal mới**, `.env` không tự nạp:
+```bash
+set -a && source .env && set +a
+```
+
+### Bước 6 — Chạy chatbot và hỏi thử
+
+```bash
+python3 -m interfaces.dashboard.app
+```
+Mở http://localhost:8500, gõ câu hỏi, vd. "How is the system doing right now?" — nếu trả lời về
+mà không có lỗi 500/402 nghĩa là OpenRouter key + docker stack đã chạy đúng.
+
+Sau bước này, xem tiếp mục 1-5 bên dưới để biết Grafana, cách tạo lỗi demo (chaos), và slide
+thuyết trình.
+
+---
+
 ## Kiến trúc tổng quan
 
 ```
@@ -51,7 +131,7 @@ chaos can thiệp vào các service của demo). Xem phần "Tạo kịch bản 
 
 **Chạy:**
 ```bash
-set -a && source .env && set +a     # bắt buộc — xem phần "Biến môi trường .env" bên dưới
+set -a && source .env && set +a     # bắt buộc — xem "Hướng dẫn chạy — từng bước" ở đầu file
 python3 -m interfaces.dashboard.app
 ```
 Mở http://localhost:8500 → là màn hình chat, gõ câu hỏi rồi Enter. Mỗi câu hỏi chạy qua toàn bộ
@@ -211,28 +291,9 @@ npx @marp-team/marp-cli presentation/PRESENTATION.md -o slides.pdf
 
 ## Cài đặt lần đầu
 
-1. **Clone otel-demo** — xem mục 3 ở trên.
-
-2. **Bật docker compose** — xem mục 3 ở trên.
-
-3. **Cài Python deps** — repo này chưa có `requirements.txt`/`pyproject.toml` (thiếu sót đã ghi
-   chú trong `PROGRESS.md`). Thư mục `.venv` ở root nếu có là rác còn sót từ thử nghiệm Playwright
-   (chỉ có `playwright`/`greenlet`) — **đừng dùng venv đó cho app**. Cài thẳng vào user
-   site-packages:
-   ```bash
-   python3 -m pip install --user pydantic fastapi uvicorn requests pyyaml langgraph pytest anthropic openai
-   ```
-   (thêm `--break-system-packages` nếu pip từ chối vì Python hệ thống bị khoá externally-managed).
-
-4. **Tạo file `.env`**:
-   ```bash
-   cp .env.example .env
-   ```
-   Set `LLM_PROVIDER` (mặc định `anthropic`) và key tương ứng (`ANTHROPIC_API_KEY` /
-   `DEEPSEEK_API_KEY`), hoặc trỏ `OLLAMA_URL` vào Ollama chạy local nếu muốn khỏi tốn phí API.
-
-   **Nhớ:** `.env` không tự load, phải `set -a && source .env && set +a` mỗi phiên terminal mới
-   trước khi chạy bất kỳ lệnh Python nào ở trên (xem lại phần 1).
+Xem **"Hướng dẫn chạy — từng bước (dùng OpenRouter)"** ở đầu file. Ghi chú thêm: thư mục `.venv` ở
+root nếu có là rác còn sót từ thử nghiệm Playwright (chỉ có `playwright`/`greenlet`) — **đừng dùng
+venv đó cho app**, lệnh `pip install --user` ở Bước 4 là đủ.
 
 ---
 
