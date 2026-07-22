@@ -1,0 +1,136 @@
+<title>Chaos Control Panel</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 1.3rem; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0; }
+  button { padding: 10px 14px; border-radius: 6px; border: 1px solid #888; background: #f4f4f4; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.danger { border-color: #b00; color: #b00; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 14px 16px; margin: 14px 0; }
+  .flag-on { color: #b00; font-weight: 600; }
+  .flag-off { color: #2a2; }
+  #msg { min-height: 1.2em; color: #555; }
+  input[type=number] { width: 70px; }
+</style>
+
+<h1>Chaos Control Panel</h1>
+
+<div class="card">
+  <strong>Status</strong>
+  <div id="status">loading…</div>
+</div>
+
+<div class="card">
+  <strong>Normal flow (real order, no chaos)</strong>
+  <p>Places one real order through the shop's own add-to-cart + checkout logic, then fetches its
+     logs from Loki -- a quick way to confirm the pipeline works before testing a failure case.</p>
+  <div class="row">
+    <button onclick="runNormalFlow()">Run order + fetch logs</button>
+  </div>
+  <pre id="normal-flow-out" style="white-space:pre-wrap;font-size:0.85em;background:#f8f8f8;padding:8px;border-radius:6px;display:none;"></pre>
+</div>
+
+<div class="card">
+  <strong>Trigger a case</strong>
+  <div id="scenarios"></div>
+</div>
+
+<div class="card">
+  <strong>Clean environment</strong>
+  <p>Resets all flags to off and archives + clears <code>analysis_history.jsonl</code>,
+     saved conversations, and <code>injected_events.log</code> so the next case starts with a clean log.
+     Old data is moved to <code>results/archive/&lt;timestamp&gt;/</code>, not deleted.</p>
+  <button class="danger" onclick="cleanReset()">Reset for fresh env</button>
+</div>
+
+<div id="msg"></div>
+
+<script>
+const SCENARIOS = ["payment_failure", "payment_outage", "queue_backlog", "overload"];
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+
+function renderScenarios(defaults, current) {
+  const el = document.getElementById("scenarios");
+  el.innerHTML = "";
+  for (const name of SCENARIOS) {
+    const running = current && current.name === name;
+    const div = document.createElement("div");
+    div.className = "row";
+    div.innerHTML = `
+      <span style="width:140px">${name}</span>
+      <input type="number" id="dur-${name}" value="${defaults[name]}" ${running ? "disabled" : ""}>s
+      <button ${current ? "disabled" : ""} onclick="start('${name}')">Start</button>
+      <button class="danger" ${running ? "" : "disabled"} onclick="stop('${name}')">Stop</button>
+    `;
+    el.appendChild(div);
+  }
+}
+
+async function refresh() {
+  const s = await api("/status");
+  renderScenarios(s.defaults, s.current);
+  const flagLines = Object.entries(s.flags)
+    .map(([f, v]) => `${f}: <span class="${v === 'off' ? 'flag-off' : 'flag-on'}">${v}</span>`)
+    .join(" &nbsp; ");
+  let runningLine = "no scenario running";
+  if (s.current) {
+    const remaining = Math.max(0, Math.round(s.current.ends_at - Date.now() / 1000));
+    runningLine = `<strong>${s.current.name}</strong> running, ~${remaining}s left`;
+  }
+  document.getElementById("status").innerHTML = `${runningLine}<br>${flagLines}`;
+}
+
+async function start(name) {
+  const duration = parseInt(document.getElementById(`dur-${name}`).value, 10);
+  try {
+    await api(`/scenarios/${name}/start?duration=${duration}`, { method: "POST" });
+    msg(`started ${name} for ${duration}s`);
+  } catch (e) { msg(e.message, true); }
+  refresh();
+}
+
+async function stop(name) {
+  try {
+    await api(`/scenarios/${name}/stop`, { method: "POST" });
+    msg(`stopping ${name}`);
+  } catch (e) { msg(e.message, true); }
+  refresh();
+}
+
+async function runNormalFlow() {
+  const out = document.getElementById("normal-flow-out");
+  out.style.display = "block";
+  out.textContent = "placing order...";
+  try {
+    const order = await api("/normal-flow/run", { method: "POST" });
+    out.textContent = `trace_id: ${order.trace_id}\nproduct: ${order.product_id} x${order.quantity}\nfetching logs...`;
+    const logs = await api(`/logs/${order.trace_id}?wait=10`);
+    out.textContent = `trace_id: ${order.trace_id}\nproduct: ${order.product_id} x${order.quantity}\n${logs.count} log lines:\n`
+      + logs.logs.slice(0, 10).map(l => `  [${l.service}] ${l.message.slice(0, 90)}`).join("\n");
+    msg(`normal flow done: ${logs.count} log lines for trace ${order.trace_id}`);
+  } catch (e) { out.textContent = "error: " + e.message; msg(e.message, true); }
+}
+
+async function cleanReset() {
+  try {
+    const r = await api("/reset", { method: "POST" });
+    msg(r.moved.length ? `reset done, archived: ${r.moved.join(", ")}` : "reset done, nothing to archive");
+  } catch (e) { msg(e.message, true); }
+  refresh();
+}
+
+function msg(text, isError) {
+  const el = document.getElementById("msg");
+  el.textContent = text;
+  el.style.color = isError ? "#b00" : "#555";
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>

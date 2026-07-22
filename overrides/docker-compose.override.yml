@@ -48,6 +48,7 @@ services:
       - GF_SECURITY_ALLOW_EMBEDDING=true
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_AUTH_DISABLE_LOGIN_FORM=false
     volumes:
       - ../overrides/grafana/tempo-datasource.yaml:/etc/grafana/provisioning/datasources/jaeger.yaml
       - ../overrides/grafana/loki-datasource.yaml:/etc/grafana/provisioning/datasources/opensearch.yaml

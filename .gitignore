@@ -7,5 +7,6 @@ venv/
 chaos/injected_events.log
 results/analysis_history.jsonl
 results/conversations/
+results/archive/
 .cache/
 tests/screenshots/

@@ -95,6 +95,13 @@ key that's out of credit (`402` from every `/ask` call)** — this matches the k
 logged in `PROGRESS.md`. Top up OpenRouter, switch to a real `ANTHROPIC_API_KEY`, or run Ollama
 locally before demoing.
 
+**Chaos control panel** (button-driven UI to trigger/stop scenarios + reset for a clean demo take —
+see "Triggering chaos scenarios" below for full details):
+```bash
+python3 -m interfaces.chaos_panel.app
+```
+Open http://localhost:8600.
+
 **Background scanner** (polls for anomalies every 60s, fires an alert into the chat/history when found):
 ```bash
 set -a && source .env && set +a
@@ -133,7 +140,43 @@ All failures are existing `flagd` flags in `otel-demo/src/flagd/demo.flagd.json`
 that file in place (flagd hot-reloads it — no restart needed). `chaos/flags.py` does the edit;
 `chaos/scenarios.py` wraps it into named, timed runs.
 
-**Run one scenario end-to-end** (enables the flag, waits, disables it, logs to `chaos/injected_events.log`):
+### Chaos control panel (API + UI, no CLI needed)
+
+`interfaces/chaos_panel` is a separate small FastAPI service — a button-driven UI to run/stop each
+scenario and to reset the environment between demo takes, so you don't need a terminal during the demo.
+```bash
+python3 -m interfaces.chaos_panel.app
+```
+Open **http://localhost:8600**. Confirmed live: starting a scenario flips the flag immediately and runs
+it in the background (HTTP call returns right away, no blocking); only one scenario can run at a time
+(a second `start` while one is active returns `409`); **Stop** cancels the wait early, resets the flag
+immediately, and still logs the correct (shortened) end time.
+
+The panel also has a **"Run order + fetch logs"** button — this drives the shop's actual main
+checkout logic (add-to-cart → checkout, exactly what the demo's own load generator does) rather than
+any chaos flag, and returns the resulting `trace_id` plus its logs, so you can confirm log
+retrieval/correlation works *before* testing a failure case. Confirmed live end-to-end: a manually
+crafted `traceparent: 00-<trace_id>-<span_id>-01` header sent on the cart/checkout calls propagates
+through `frontend-proxy` → `cart` → `checkout` (all OTel-instrumented services honor an incoming W3C
+trace context by default), so the trace_id we generate is the real one — Tempo returned the full trace
+and Loki returned 20 real log lines keyed to it, no polling needed once ingestion caught up (confirmed
+both the `wait=0` empty-immediately case and the `wait=10` case that then found the logs ~1s later).
+
+Endpoints, if you want to script it:
+
+| Endpoint | Effect |
+|---|---|
+| `POST /normal-flow/run` | places one **real** order through the shop's own add-to-cart + checkout logic (no chaos) with a hand-crafted W3C `traceparent` header, and returns the resulting `trace_id` |
+| `GET /logs/{trace_id}?wait=10` | fetches that trace's logs from Loki, polling up to `wait` seconds since ingestion lags a few seconds behind the request |
+| `GET /status` | current running scenario (if any) + live flagd state of all 4 flags |
+| `POST /scenarios/{name}/start?duration=180` | start a case (`payment_failure`, `payment_outage`, `queue_backlog`, `overload`) |
+| `POST /scenarios/{name}/stop` | cancel early, flag reset immediately |
+| `POST /reset` | **clean environment for a fresh case**: force all flags off, then archive (not delete) any non-empty `results/analysis_history.jsonl`, `results/conversations/`, `chaos/injected_events.log` into `results/archive/<timestamp>/` and leave those paths empty — so the dashboard's history/conversation list and the injected-events log start clean for the next case, without losing prior runs. Confirmed live: after reset, `results/analysis_history.jsonl` no longer exists (dashboard's `/history` already tolerates a missing file → returns `[]`) and the old data sat untouched under `results/archive/20260722T164001Z/`. |
+
+Note: if `scripts.scheduled_scan` is running as its own process, its 5-minute dedupe memory isn't
+touched by `/reset` — restart that process too if you want it to re-fire on a repeated signal right away.
+
+**Run one scenario end-to-end** (CLI alternative, blocks until done) (enables the flag, waits, disables it, logs to `chaos/injected_events.log`):
 ```bash
 python3 -m chaos.scenarios <name> [--duration 120]
 ```
@@ -176,8 +219,9 @@ retrieval/          log/metric/trace clients + PII masking — everything leavin
 detection/          pure-Python signal detector (no LLM)
 agents/             schemas, LLM client (anthropic/deepseek/ollama), web search, context builder,
                     analyst, LangGraph orchestrator
-interfaces/dashboard FastAPI chat app + static UI
-results/            analysis_history.jsonl + saved conversations
+interfaces/dashboard    FastAPI chat app + static UI (localhost:8500)
+interfaces/chaos_panel  FastAPI chaos control panel: start/stop scenarios, reset env (localhost:8600)
+results/            analysis_history.jsonl + saved conversations (+ archive/ from chaos_panel resets)
 scripts/            run_demo.py (presenter demo), scheduled_scan.py (background scanner)
 tests/              pytest — mostly fast (some still hit live infra), plus 2 live-chaos files
                     that are slow/expensive and must be run explicitly (see "Tests" above)
